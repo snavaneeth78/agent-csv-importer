@@ -775,17 +775,18 @@ One package, `@distru/csv-importer`, with a subpath export per module (`@distru/
 
 | Module | Contents |
 |---|---|
-| `csv-importer/src/core` | parse, profile, matchers 0–4, unit parser, DSL, validate, dedupe, state machine, ports |
-| `csv-importer/src/pg` | Store, pg-boss queues & workers, `csv-importer/migrations/*.sql` |
-| `csv-importer/src/scorers` | Jev scorer, LangChain LLM matcher |
+| `csv-importer/src/core` | parse, profile, unit parser, DSL, cascade order/thresholds/conflict rule, plan, validate, dedupe, template output, chunking, state machine (`ImportService`), ports |
+| `csv-importer/src/scorers` | Stage matchers 0–6 (template, memory, exact, pattern, fuzzy, Jev, LLM), value-map matchers, model gateway, mock and real Jev/LLM |
+| `csv-importer/src/pg` | Store (Kysely, RLS via `withTenant`); migrations in `csv-importer/migrations/*.sql` |
+| `csv-importer/src/workers` | `createImporter`, pg-boss queues and jobs (parse, match, prepare, commit, follow-up, snapshot) |
 | `csv-importer/src/langgraph` | `import_csv_*` tools, `awaitGate` |
-| `csv-importer/src/distru` | `product.schema.ts`, sink (template CSV out, error CSV in), duplicate lookup, mock `/upload-products` |
+| `csv-importer/src/distru` | `product.schema.ts`, Distru profile (sink: template CSV out, error CSV in; catalog; follow-ups over MCP), `MockDistru` |
 | `csv-importer/src/ui` | React components |
 | `demo/` | Dev-only demo page and server that run the library |
 | `fixtures/` | 7 messy catalogs + expected plans (eval set) |
 | `docs/` | `system-design.md`, `tech-spec.md`, `api-integration.md` |
 
-Build order: core (with unit parser) → pg + pg-boss → distru profile + mock sink → scorers → langgraph tools → ui.
+Build order: core (with unit parser) → pg → workers (pg-boss) → distru profile + mock sink → scorers → langgraph tools → ui.
 
 ## 12. Verification
 

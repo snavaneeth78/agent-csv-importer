@@ -29,7 +29,8 @@ Open http://localhost:5173. Jev and the LLM run as deterministic stubs by defaul
 USE_REAL_MODELS=1 OPENAI_API_KEY=sk-... TYPESAFE_API_KEY=... docker compose up --build
 ```
 
-Without Docker for the app (Node 22+, Docker still runs Postgres): `npm install && npm run demo`.
+Without Docker for the app (Node 22.22+, Docker still runs Postgres): `npm install && npm run demo`. Both ways use
+port 5173, so stop one before starting the other.
 
 ## Try it
 
@@ -43,8 +44,9 @@ setup: [docs/demo-guide.md](docs/demo-guide.md).
 
 ## Use the library
 
-Copy [`csv-importer/`](csv-importer) into your repo. It is TypeScript source with no build step, one package with
-a subpath per module:
+Copy [`csv-importer/`](csv-importer) into your repo as a workspace package. It is TypeScript source with no build
+step, so the host needs a TS-aware bundler or runtime (Vite, tsx, Next.js `transpilePackages`), plus `@types/pg` and
+`@types/papaparse` for type checking. One package, a subpath per module:
 
 | Import | What it is |
 |---|---|

@@ -20,6 +20,10 @@ services:
       postgres:
         condition: service_healthy
     ports: ["127.0.0.1:5173:5173"]
+    # Everything in .env reaches the demo when the file exists; `environment` below wins on conflicts.
+    env_file:
+      - path: .env
+        required: false
     environment:
       - DATABASE_URL=postgres://distru:distru@postgres:5432/csv_import
       - USE_REAL_MODELS=${USE_REAL_MODELS:-0}
