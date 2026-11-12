@@ -1,0 +1,14 @@
+{
+  "Product Name": "name",
+  "SKU": "sku",
+  "Category": "category",
+  "Strain": "strain",
+  "Brand": "brand",
+  "Vendor": "vendor",
+  "Price": "unit_price",
+  "Cost": "unit_cost",
+  "Weight": "net_weight",
+  "THC %": "total_thc",
+  "Barcode": "upc",
+  "Description": "description"
+}

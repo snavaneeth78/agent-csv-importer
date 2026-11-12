@@ -1,0 +1,36 @@
+{
+  "name": "@distru/csv-importer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./core": "./src/core/index.ts",
+    "./scorers": "./src/scorers/index.ts",
+    "./pg": "./src/pg/index.ts",
+    "./workers": "./src/workers/index.ts",
+    "./langgraph": "./src/langgraph/index.ts",
+    "./distru": "./src/distru/index.ts",
+    "./ui": "./src/ui/index.ts",
+    "./ui/styles.css": "./src/ui/styles.css"
+  },
+  "dependencies": {
+    "@langchain/anthropic": "^1.6.4",
+    "@langchain/core": "^1.4.0",
+    "@langchain/langgraph": "^1.7.3",
+    "@langchain/openai": "^1.8.4",
+    "@tanstack/react-virtual": "^3.14.26",
+    "iconv-lite": "^0.7.3",
+    "jschardet": "^4.1.0",
+    "kysely": "^0.29.8",
+    "papaparse": "^5.7.1",
+    "pg": "^8.23.1",
+    "pg-boss": "^12.38.2",
+    "talisman": "^1.1.5",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "zod": "^4.6.7"
+  },
+  "peerDependencies": {
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "name": "agent-csv-importer",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "csv-importer",
+    "demo"
+  ],
+  "scripts": {
+    "db:up": "docker compose up -d --wait postgres",
+    "db:down": "docker compose down",
+    "fixtures": "tsx scripts/gen-fixtures.ts",
+    "test": "vitest run",
+    "test:unit": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "eval": "tsx scripts/eval.ts",
+    "demo": "npm run db:up && npm run -w @distru/csv-importer-demo dev",
+    "diag:models": "tsx scripts/diag-models.ts",
+    "package": "bash scripts/package.sh"
+  },
+  "devDependencies": {
+    "@testcontainers/postgresql": "^12.2.1",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.6",
+    "@types/papaparse": "^5.5.2",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "concurrently": "^10.0.7",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.12"
+  }
+}

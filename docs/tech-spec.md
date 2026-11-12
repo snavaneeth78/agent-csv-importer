@@ -67,7 +67,7 @@ flowchart TB
 | Concern | Choice |
 |---|---|
 | Background jobs, retries, resume | **pg-boss** (Postgres-native, no Redis) |
-| CSV parsing | papaparse (streaming, delimiter sniffing) |
+| CSV parsing | papaparse (delimiter sniffing; whole file in memory, capped at 50 MB / 100k rows) |
 | XLSX | SheetJS (cdn.sheetjs.com build) |
 | Encoding | jschardet + iconv-lite |
 | Schema / validation | Zod v4 (stored as JSON Schema) |
@@ -75,12 +75,12 @@ flowchart TB
 | Fuzzy match | **talisman** (Jaro-Winkler, token-set metrics) |
 | Field scoring | Jev (TypeSafe) behind a `Scorer` port |
 | LLM | Bring your own LangChain `BaseChatModel` |
-| UI | React + TanStack Table/Virtual + shadcn/ui |
+| UI | React + TanStack Virtual, plain CSS |
 | Tests | Vitest + testcontainers (Postgres) |
 
 ## 3. Target schema (drop-in file)
 
-The Distru product schema lives in one file, `packages/distru/src/product.schema.ts`. Editing this file is
+The Distru product schema lives in one file, `csv-importer/src/distru/product.schema.ts`. Editing this file is
 the only change needed when Distru's template changes.
 
 **Where it comes from:**
@@ -218,9 +218,13 @@ Rules:
   against the allowed values, which `RefResolver` fetches once per import (§8.3).
   - Auto-created refs (category, subcategory, group, strain): unknown values are kept as new values and
     listed at Gate 1 as *will be created*.
-  - Must-exist refs (vendor, brand, unit type, owner, tag): unknown values have to be mapped to an existing
-    value at Gate 1. Otherwise the cell is blank (optional field) or the row is invalid. The importer never
-    creates vendors or brands.
+  - Must-exist refs (vendor, brand, unit type, owner, tag): unknown values get one blocking question per
+    column at Gate 1: add them in Distru and re-check (fetches the list again), match each to an existing
+    value, or leave them blank (the row is invalid if the field is required). The importer never creates
+    vendors or brands.
+  - A must-exist column where no value is in Distru may be the wrong field, so the user is asked "is this
+    really Vendor?". That check is skipped when the header is the field's own name (or the user picked the
+    field) and the values fit no other Distru list: those are new names, not a wrong match.
 - If the file has no `name` column, the import stops at Gate 1 with a *not a product list* question (§9b).
 
 **Latency targets** (measured by the eval, not hard requirements):
@@ -432,7 +436,7 @@ sequenceDiagram
   are already done. Before a commit chunk retries, it re-checks which SKUs already exist, so a crash
   never creates a product twice.
 - **Optimistic edits:** plan and row edits carry `plan_version`, and a stale version is rejected.
-- **Workers:** `importer.work(boss)` registers handlers. They run in the harness process or in a separate
+- **Workers:** `importer.work()` registers handlers. They run in the harness process or in a separate
   worker process, which is the same code either way.
 
 **Gates.** Both gates are always required. Nothing moves past `mapping_review` or `commit_review` without an
@@ -465,7 +469,8 @@ and deep-merged over the defaults. Nothing below is hard-coded anywhere else.
 | `sink.followupConcurrency` | 5 | in-flight MCP calls |
 | `sink.followupRatePerSecond` | 10 | per-tenant MCP call rate |
 | `sink.followupRetries` | 3 | per-row retries on 429 / 5xx |
-| `matching.thresholds` | memory 0.9, pattern 0.85, fuzzy 0.85, jev 0.75 | per-stage acceptance (§4.1) |
+| `matching.thresholds` | memory 0.9, pattern 0.85, fuzzy 0.85, jev 0.75, jevSuggest 0.4, llm 0.6 | per-stage acceptance (§4.1). Jev between `jevSuggest` and `jev`, and an LLM answer under `llm`, become suggestions the user confirms at Gate 1; an LLM "not a field" under `llm` ignores nothing |
+| `snapshot.pageSize` | 500 | products per catalog page |
 | `matching.fuzzyMin` | 0.88 | Jaro-Winkler floor |
 | `scorers.timeoutMs` | jev 2000, llm 20000 | before the single retry |
 | `retention.rowsDays` | 90 | cleanup cron |
@@ -766,15 +771,18 @@ attention), and a download for the error CSV. After a reload, the card rebuilds 
 
 ## 11. Repo layout & build order
 
-| Package | Contents |
+One package, `@distru/csv-importer`, with a subpath export per module (`@distru/csv-importer/core`, …).
+
+| Module | Contents |
 |---|---|
-| `packages/core` | parse, profile, matchers 0–4, unit parser, DSL, validate, dedupe, state machine, ports |
-| `packages/pg` | Store, pg-boss queues & workers, `migrations/*.sql` |
-| `packages/scorers` | Jev scorer, LangChain LLM matcher |
-| `packages/langgraph` | `import_csv_*` tools, `awaitGate` |
-| `packages/distru` | `product.schema.ts`, sink (template CSV out, error CSV in), duplicate lookup, mock `/upload-products` |
-| `packages/ui` | React components + a dev-only demo page that calls the library in-process |
-| `fixtures/` | ~10 messy catalogs + expected plans (eval set) |
+| `csv-importer/src/core` | parse, profile, matchers 0–4, unit parser, DSL, validate, dedupe, state machine, ports |
+| `csv-importer/src/pg` | Store, pg-boss queues & workers, `csv-importer/migrations/*.sql` |
+| `csv-importer/src/scorers` | Jev scorer, LangChain LLM matcher |
+| `csv-importer/src/langgraph` | `import_csv_*` tools, `awaitGate` |
+| `csv-importer/src/distru` | `product.schema.ts`, sink (template CSV out, error CSV in), duplicate lookup, mock `/upload-products` |
+| `csv-importer/src/ui` | React components |
+| `demo/` | Dev-only demo page and server that run the library |
+| `fixtures/` | 7 messy catalogs + expected plans (eval set) |
 | `docs/` | `system-design.md`, `tech-spec.md`, `api-integration.md` |
 
 Build order: core (with unit parser) → pg + pg-boss → distru profile + mock sink → scorers → langgraph tools → ui.
@@ -797,7 +805,7 @@ Build order: core (with unit parser) → pg + pg-boss → distru profile + mock 
   - stale `plan_version`;
   - column memory reused on a reordered file;
   - a 25k-row file runs as 3 chunks.
-- **Matching eval (`pnpm eval`):** per-fixture field precision and recall, share of columns resolved per
+- **Matching eval (`npm run eval`):** per-fixture field precision and recall, share of columns resolved per
   stage, and latency against the §4.1 targets.
 - **E2E (Playwright, demo page):** drop a fixture, watch the mapping stream in, pass both gates, reload
   mid-commit, see progress resume, download the error CSV.

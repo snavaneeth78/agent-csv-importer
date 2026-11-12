@@ -1,0 +1,14 @@
+{
+  "Prod. Nm.": "name",
+  "Desc": "description",
+  "Sell Px": "unit_price",
+  "Wt": "net_weight",
+  "Strain Name": "strain",
+  "Producer": "brand",
+  "Bar Code #": "upc",
+  "Inv Category": "category",
+  "Pack Qty": "units_per_case",
+  "Lab THC": "total_thc",
+  "On Menu": "featured",
+  "Created At": null
+}

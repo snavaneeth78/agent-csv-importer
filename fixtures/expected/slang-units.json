@@ -1,0 +1,6 @@
+{
+  "Product": "name",
+  "Code": "sku",
+  "Size": "net_weight",
+  "Price": "unit_price"
+}

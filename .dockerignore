@@ -1,0 +1,10 @@
+node_modules
+**/node_modules
+.env
+.env.*
+!.env.example
+demo/.data
+.git
+.superpowers
+docs/superpowers
+dist

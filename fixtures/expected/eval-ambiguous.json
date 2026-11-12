@@ -1,0 +1,12 @@
+{
+  "Prod Title": "name",
+  "Item Code": "sku",
+  "Amt": "unit_price",
+  "Cat": "category",
+  "Cultivar": "strain",
+  "Producer": "vendor",
+  "Wt": "net_weight",
+  "Potency": "total_thc",
+  "Qty per Case": "units_per_case",
+  "Label": "group"
+}

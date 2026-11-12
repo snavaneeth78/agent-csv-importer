@@ -1,0 +1,14 @@
+{
+  "Item Title": "name",
+  "Item #": "sku",
+  "Retail ($)": "unit_price",
+  "Landed Cost": "unit_cost",
+  "Size": "net_weight",
+  "THC": "total_thc",
+  "Cultivar": "strain",
+  "Mfr": "brand",
+  "Supplier": "vendor",
+  "Status": "active",
+  "Notes": null,
+  "Internal Ref": null
+}

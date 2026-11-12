@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: distru
+      POSTGRES_PASSWORD: distru
+      POSTGRES_DB: csv_import
+    ports: ["127.0.0.1:54329:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U distru -d csv_import"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  # `docker compose up` runs the demo on http://localhost:5173 with stub models.
+  # Real models: USE_REAL_MODELS=1 OPENAI_API_KEY=... TYPESAFE_API_KEY=... docker compose up
+  demo:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports: ["127.0.0.1:5173:5173"]
+    environment:
+      - DATABASE_URL=postgres://distru:distru@postgres:5432/csv_import
+      - USE_REAL_MODELS=${USE_REAL_MODELS:-0}
+      # No defaults below: each is passed only when set, so the code's per-provider defaults apply otherwise.
+      - LLM_STAGE
+      - LLM_PROVIDER
+      - LLM_MODEL
+      - JEV_PROVIDER
+      - JEV_MODEL
+      - OPENAI_API_KEY
+      - TYPESAFE_API_KEY
+      - OPENROUTER_API_KEY
+      - ANTHROPIC_API_KEY
