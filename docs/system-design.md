@@ -12,8 +12,10 @@ The harness makes agentic work **predictable, durable and safe to operate**. Fou
 4. **One toolset, two front doors.** The same tools, gates and state power the Copilot chat today and scheduled
    workflows tomorrow.
 
-The CSV importer ([tech-spec.md](tech-spec.md)) is the first feature on these rules. §9 shows the next ones reuse
-the same pieces. Rationale and rejected alternatives: [decisions.md](decisions.md).
+This design **extends Distru's existing LangGraph.js Copilot**; it doesn't add a service. The CSV importer
+([tech-spec.md](tech-spec.md)) is the first feature on these rules: a library that plugs in as six `import_csv_*`
+tools plus pg-boss jobs. §9 shows the next ones reuse the same pieces. Rationale and rejected alternatives:
+[decisions.md](decisions.md).
 
 ## 1. Architecture
 
@@ -27,7 +29,7 @@ flowchart LR
 
   GQL["Distru API / GraphQL<br/>auth → signed run context"]
 
-  subgraph H["distru-harness (Node, TypeScript)"]
+  subgraph H["Distru agent harness (existing LangGraph.js Copilot, extended)"]
     RunAPI["Run API<br/>start · resume · events"]
     RT["Agent runtime (LangGraph.js)<br/>copilot graph · workflow templates"]
     Gates["Gate service"]
@@ -67,10 +69,13 @@ flowchart LR
   H -. "mint short-lived actor token" .-> GQL
 ```
 
-- **A separate Node service** next to the Distru API, sharing its Postgres cluster under its own schemas. A
-  model outage can't take down the ERP, and there's no new datastore.
-- **One image, two roles.** `ROLE=api` serves the Run API and streams user-started Copilot turns. `ROLE=worker`
-  runs pg-boss jobs: graph runs (`harness.run`) and import work (`csv.*`). Imports never slow chat.
+- **Built into Distru's existing LangGraph.js Copilot, not a new service.** The importer is a library: its six
+  `import_csv_*` tools join the Copilot's tool registry, and its jobs run on pg-boss. What this design adds to the
+  harness: the gate service, effect tags on tools, the `harness` tables and workflow templates. Everything lives
+  in Distru's Postgres under its own schemas, so there's no new datastore.
+- **Chat turns and heavy work run in different processes.** API processes serve the Run API and stream
+  user-started Copilot turns. Worker processes (`ROLE=worker`) run pg-boss jobs: graph runs (`harness.run`) and
+  import work (`csv.*`). A tool call starts a job and returns at once, so imports never slow chat.
 - **Distru's API owns auth.** It forwards a signed run context `{ tenantId, actor, actorToken, threadId }`. The
   actor token lives only in memory, keyed by `runId`. Background work mints a fresh short-lived token for the
   run's owner.
