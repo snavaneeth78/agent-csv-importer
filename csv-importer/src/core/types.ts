@@ -150,6 +150,11 @@ export interface MappingPlan {
   clearBlanks: boolean;
   /** Gate 2: what to do with rows that exist in Distru with changes. */
   existingAction: "skip" | "update";
+  /**
+   * Model answers still on their way. The review opens once the rule stages finish; `columns` are waiting for
+   * Jev/the LLM, `fields` for model value matching (vendors, brands). Gate 1 can't pass until this is gone.
+   */
+  pending?: { columns: string[]; fields: string[] };
 }
 
 export type ImportStatus =

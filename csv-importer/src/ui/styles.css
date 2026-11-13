@@ -397,6 +397,7 @@
 .ci-tally-needs .ci-tally-dot { background: #e0a400; }
 .ci-tally-mapped .ci-tally-dot { background: var(--ci-good); }
 .ci-tally-ignored .ci-tally-dot { background: var(--ci-border-strong); }
+.ci-tally-matching .ci-tally-dot { background: var(--ci-accent); }
 .ci-tally-filled .ci-tally-dot { background: var(--ci-mint); }
 
 .ci-table { --ci-cols: minmax(0, 1fr) 16px minmax(0, 1.15fr) 118px; border: 1px solid var(--ci-border); border-radius: var(--ci-radius); background: var(--ci-bg); overflow: clip; }
@@ -431,6 +432,9 @@
 .ci-dot-req { background: #e0a400; box-shadow: 0 0 0 3px #ffeeb0; }
 .ci-dot-opt { background: var(--ci-bg); border: 2px solid #d9b740; }
 .ci-dot-ignored { background: var(--ci-bg); border: 2px solid var(--ci-border-strong); }
+.ci-dot-matching { background: var(--ci-bg); border: 2px dashed var(--ci-accent); }
+.ci-group-matching .ci-group-head { color: var(--ci-muted); }
+.ci-meta-note .ci-spinner, .ci-footer .ci-spinner { width: 10px; height: 10px; border-width: 1.5px; vertical-align: -1px; margin-right: 4px; }
 .ci-dot-filled { background: var(--ci-mint); box-shadow: 0 0 0 3px var(--ci-mint-soft); }
 .ci-raw-off { color: var(--ci-muted); background: var(--ci-surface); }
 .ci-nocol { font-size: 12px; font-style: italic; color: var(--ci-muted); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

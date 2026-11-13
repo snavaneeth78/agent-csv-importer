@@ -20,7 +20,7 @@ const stageTotals: Record<string, { n: number; correct: number }> = {};
 let suggested = 0, suggestedRight = 0;
 let tp = 0, fp = 0, fn = 0, cols = 0, llmCols = 0;
 const rows: string[][] = [];
-const latency = { deterministic: [] as number[], jev: [] as number[], llm: [] as number[] };
+const latency = { deterministic: [] as number[], jev: [] as number[], llm: [] as number[], models: [] as number[] };
 
 for (const f of readdirSync("fixtures/expected").filter((x) => x.endsWith(".json")).sort()) {
   const name = f.replace(/\.json$/, "");
@@ -29,8 +29,12 @@ for (const f of readdirSync("fixtures/expected").filter((x) => x.endsWith(".json
   const table = buildTable(parseFile(new Uint8Array(readFileSync(`fixtures/${file}`))), { vocabulary, maxRows: config.limits.maxRows });
   const columns = profileColumns(table.headers, table.rows.map((r) => r.cells));
   const ms: Record<string, number> = {};
+  const t0 = performance.now();
   const res = await runCascade({ ctx: { tenantId: "eval", actor: "eval" }, target: productSchema, columns, memory: [], config, stages: timed(defaultStages({ config, jev: models.jev, llm: process.env.EVAL_NO_LLM === "1" ? undefined : models.llm }), ms) });
+  const wall = performance.now() - t0;
   latency.deterministic.push(["template", "memory", "exact", "pattern", "fuzzy"].reduce((s, k) => s + (ms[k] ?? 0), 0));
+  // What the user waits on for model answers: Jev and the LLM overlap, so this is less than their sum.
+  if (ms.jev !== undefined || ms.llm !== undefined) latency.models.push(wall - latency.deterministic.at(-1)!);
   if (ms.jev !== undefined) latency.jev.push(ms.jev);
   if (ms.llm !== undefined) latency.llm.push(ms.llm);
 
@@ -66,6 +70,7 @@ console.log("\n" + table(["target", "goal", "measured"], [
   ["stages 0-4 latency (p95)", "< 300 ms", p95(latency.deterministic)],
   ["Jev latency (p95)", "< 1 s", p95(latency.jev)],
   ["LLM latency (p95)", "< 5 s", p95(latency.llm)],
+  ["Jev + LLM wall clock (p95)", "", p95(latency.models)],
   ["columns reaching the LLM", "< 20%", pct(llmCols / cols)],
 ]));
 console.log(`\nJev suggestions (40-75%, user confirms): ${suggested}, right ${suggestedRight} (${pct(suggestedRight / suggested)}). Excluding them, auto-accepted precision is ${pct((tp - suggestedRight) / (tp - suggestedRight + fp - (suggested - suggestedRight)))}.`);

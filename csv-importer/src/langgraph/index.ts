@@ -41,13 +41,16 @@ export function summarize(v: ImportView) {
       options: (q.options ?? []).slice(0, 6).map((o) => ({ id: o.id, label: o.label })),
     })),
     blockingQuestions: v.blockingQuestions,
+    stillMatching: v.matching ? { columns: v.matching.columns.slice(0, 15), fields: v.matching.fields } : null,
     counts: v.counts,
     gate2: v.plan ? { existingAction: v.plan.existingAction, clearBlanks: v.plan.clearBlanks } : null,
     issues: v.issueSummary.slice(0, 8).map((i) => `${i.severity} ${i.field ?? ""} ${i.code}: ${i.n} row(s), e.g. row ${i.firstRow}: ${i.example}`),
     followupEstimate: v.followupEstimate,
     error: v.error,
     next:
-      v.status === "mapping_review" ? (v.blockingQuestions ? "Ask the user the blocking questions." : "Ask the user to confirm the mapping.")
+      v.status === "mapping_review"
+        ? v.matching ? "Some columns are still being matched (a few seconds). Show what's mapped and any questions; don't ask for confirmation yet."
+        : v.blockingQuestions ? "Ask the user the blocking questions." : "Ask the user to confirm the mapping."
       : v.status === "commit_review" ? "Show counts and ask the user to confirm the import."
       : null,
   };

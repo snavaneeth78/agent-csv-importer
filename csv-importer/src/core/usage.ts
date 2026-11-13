@@ -12,6 +12,8 @@ export type UsageSink = (u: ModelUsage) => void;
 /** Optional per-call options for model ports. */
 export interface CallOpts {
   onUsage?: UsageSink;
+  /** Aborted when the gateway's time budget runs out, so a slow request stops instead of finishing unseen. */
+  signal?: AbortSignal;
 }
 
 export function addUsage(a: ModelUsage | undefined, b: ModelUsage): ModelUsage {

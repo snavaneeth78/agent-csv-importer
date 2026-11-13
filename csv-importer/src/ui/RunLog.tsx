@@ -11,7 +11,7 @@ const STAGE_INFO: Record<string, { name: string; how: string }> = {
   pattern: { name: "Value patterns", how: "Barcodes, sizes, prices and potency in the values" },
   fuzzy: { name: "Fuzzy names", how: "Close spelling, with a type check" },
   jev: { name: "Jev", how: "Picks one field per column: 75%+ is accepted, 40-75% becomes a suggestion to confirm, the rest goes to the LLM" },
-  llm: { name: "LLM", how: "Only columns Jev had no real answer for: headers and samples" },
+  llm: { name: "LLM", how: "Runs alongside Jev on the same columns (headers and samples); its answer is used where Jev had no real one" },
 };
 
 export function deciderOf(method: string): { label: string; tone: "rules" | "jev" | "llm" | "user" } {
@@ -176,8 +176,10 @@ export function RunLog({ view, events, onClose }: { view: ImportView; events: Im
 
             <Step title="Match columns" ms={view.stats.matchMs ?? between(at, "matching", ["mapping_review"])} done={at.has("mapping_review")}>
               <div className="ci-subtimes">
-                {(["snapshot", "refs", "profile", "cascade", "plan"] as const).filter((k) => t[k] !== undefined).map((k) => (
-                  <span key={k}>{{ snapshot: t.snapshotFull ? "Catalog load" : "Catalog", refs: "Lists", profile: "Profiles", cascade: "Cascade", plan: "Values" }[k]} {fmtMs(t[k])}</span>
+                {(["snapshot", "refs", "profile", "cascade", "plan", "review", "models"] as const).filter((k) => t[k] !== undefined).map((k) => (
+                  <span key={k} title={k === "review" ? "The review opened here; model answers filled in after" : undefined}>
+                    {{ snapshot: t.snapshotFull ? "Catalog load" : "Catalog", refs: "Lists", profile: "Profiles", cascade: "Rules", plan: "Values", review: "Review open at", models: "Models after that" }[k]} {fmtMs(t[k])}
+                  </span>
                 ))}
               </div>
               <div className="ci-cas">

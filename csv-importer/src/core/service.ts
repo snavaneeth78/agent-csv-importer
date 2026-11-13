@@ -39,6 +39,8 @@ export interface ImportView {
   error: ImportRecord["error"];
   openQuestions: Question[];
   blockingQuestions: number;
+  /** Columns and fields whose model answers are still on the way; Gate 1 waits for them. */
+  matching: { columns: string[]; fields: string[] } | null;
   overallConfidence: number;
   stats: {
     disabledStages?: string[];
@@ -64,6 +66,9 @@ function targetFieldList(target: TargetProfile["target"], refs: Record<string, s
       options: f.enumValues ?? (f.ref?.mode === "must_exist" ? refs[f.name]?.slice(0, 300) : undefined) }))
     .sort((a, b) => (order.get(a.name) ?? 999) - (order.get(b.name) ?? 999));
 }
+
+/** A model merge landed while a revise was being built: rebuild it on the merged plan. */
+class ModelMergeRace extends Error {}
 
 export class ImportService {
   /** Cascade stages switched off at runtime ("llm", "jev"). Per process; for demos and A/B comparisons. */
@@ -112,8 +117,13 @@ export class ImportService {
     return imp;
   }
 
-  private checkVersion(imp: ImportRecord, planVersion: number) {
-    if (imp.planVersion !== planVersion) throw new ConflictError(`Plan changed (version ${imp.planVersion}, you sent ${planVersion}). Reload and try again.`);
+  private checkVersion(imp: ImportRecord, planVersion: number, allowModelMerge = false) {
+    if (imp.planVersion === planVersion) return;
+    // Model answers landed after the user loaded the plan. They only fill columns the user hadn't decided, so an
+    // edit made against the plan just before them still applies (it is re-applied on the merged plan).
+    const merge = imp.stats.modelMerge;
+    if (allowModelMerge && merge && merge.to === imp.planVersion && merge.from === planVersion) return;
+    throw new ConflictError(`Plan changed (version ${imp.planVersion}, you sent ${planVersion}). Reload and try again.`);
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -190,6 +200,7 @@ export class ImportService {
         error: imp.error,
         openQuestions: plan ? plan.questions.filter((q) => q.answer === undefined || q.waiting) : [],
         blockingQuestions: plan ? openBlocking(plan).length : 0,
+        matching: plan?.pending ?? null,
         overallConfidence: plan ? overallConfidence(plan) : 0,
         stats: {
           totalRows: imp.stats.totalRows, skippedRows: imp.stats.skippedRows, kind: imp.stats.kind, sheets: imp.stats.sheets,
@@ -225,16 +236,31 @@ export class ImportService {
 
   /** Structured patch or natural-language instruction. Gate-2-only options go through setRowActions. */
   async revise(ctx: Ctx, importId: string, args: { planVersion: number; patch?: PlanPatch; instruction?: string; actor?: "agent" | "user" }) {
+    const spent: Record<string, ModelUsage> = {};
+    let patch: PlanPatch | undefined;
+    // Model answers can land while this edit is being built; then it is rebuilt once on the merged plan.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.reviseOnce(ctx, importId, args, spent, patch, (p) => (patch = p));
+      } catch (e) {
+        if (!(e instanceof ModelMergeRace) || attempt >= 2) throw e;
+      }
+    }
+  }
+
+  private async reviseOnce(
+    ctx: Ctx, importId: string, args: { planVersion: number; patch?: PlanPatch; instruction?: string; actor?: "agent" | "user" },
+    spent: Record<string, ModelUsage>, built: PlanPatch | undefined, keep: (p: PlanPatch) => void,
+  ) {
     const actor = args.actor ?? "user";
     const snapshot = await this.d.store.tx(ctx.tenantId, (r) => this.load(r, importId));
     if (snapshot.status !== "mapping_review" && snapshot.status !== "commit_review") throw new StateError(`Can't revise while ${snapshot.status}`);
-    this.checkVersion(snapshot, args.planVersion);
+    this.checkVersion(snapshot, args.planVersion, true);
     const profile = this.profile(snapshot.targetId);
 
-    let patch = args.patch ?? {};
-    const spent: Record<string, ModelUsage> = {};
+    let patch = built ?? args.patch ?? {};
     const track = (key: string) => (u: ModelUsage) => { spent[key] = addUsage(spent[key], u); };
-    if (args.instruction) {
+    if (args.instruction && !built) {
       if (!this.d.llm || !this.stageEnabled("llm")) throw new StateError("The LLM step is off, so free-text edits aren't available. Answer by number, or use \"map <column> to <field>\".");
       const plan = snapshot.plan!;
       patch = await this.d.llm.planPatch({
@@ -243,13 +269,14 @@ export class ImportService {
         fields: Object.values(profile.target.fields).map((f) => ({ name: f.name, label: f.header ?? f.name })),
         plan: { fields: plan.fields.map((m) => ({ target: m.target, sources: m.sources })), questions: plan.questions.filter((q) => !q.answer).map((q) => ({ id: q.id, prompt: q.prompt, options: (q.options ?? []).map((o) => o.id), suggested: q.suggested ?? null })) } as unknown as Json,
       }, { onUsage: track("llm:edits") });
+      keep(patch);
     }
 
     const sheetAnswer = Object.entries(patch.answers ?? {}).find(([id]) => id === "choose_sheet" || id === "choose_header_row");
     if (patch.sheet || patch.headerRow !== undefined || sheetAnswer) {
       return this.d.store.tx(ctx.tenantId, async (r) => {
         const imp = await this.load(r, importId, true);
-        this.checkVersion(imp, args.planVersion);
+        this.checkVersion(imp, args.planVersion, true);
         if (imp.status !== "mapping_review") throw new StateError("Sheet and header row can only change at Gate 1");
         const plan = imp.plan!;
         if (sheetAnswer?.[0] === "choose_sheet") plan.sheet = sheetAnswer[1];
@@ -283,11 +310,14 @@ export class ImportService {
       profile, columns: snapshot.stats.columns ?? [], refs, valueStages: this.activeValueStages(),
       distinct: (src) => this.d.store.tx(ctx.tenantId, (r) => r.distinctRaw(importId, src, 1000)),
       onUsage: (method, u) => track(`${method}:values`)(u),
+      // While model answers are on the way, the matching job finishes the values they affect.
+      deferModels: !!patched.pending,
     });
 
     return this.d.store.tx(ctx.tenantId, async (r) => {
       const imp = await this.load(r, importId, true);
-      this.checkVersion(imp, args.planVersion);
+      if (imp.planVersion !== snapshot.planVersion && imp.stats.modelMerge?.to === imp.planVersion) throw new ModelMergeRace();
+      this.checkVersion(imp, snapshot.planVersion);
       // The plan was rebuilt outside the lock (model calls). A gate confirmed or cancelled meanwhile wins.
       if (imp.status !== snapshot.status) throw new ConflictError(`Import moved to ${imp.status} while the mapping was being revised`);
       const usage = { ...(imp.stats.usage ?? {}) };
@@ -323,6 +353,8 @@ export class ImportService {
       if (imp.status !== "mapping_review") throw new StateError(`Gate 1 is not open (status ${imp.status})`);
       this.checkVersion(imp, args.planVersion);
       const messageIds = this.gateMessage(imp, args);
+      const waiting = imp.plan!.pending;
+      if (waiting) throw new StateError(`Still matching ${waiting.columns.length ? `${waiting.columns.length} column(s)` : "some values"} with the models; this takes a few seconds. Confirm once they're in.`);
       const blocking = openBlocking(imp.plan!);
       if (blocking.length) throw new StateError(`${blocking.length} question(s) need an answer first: ${blocking.map((q) => q.prompt).join(" | ")}`);
       const cols = new Map((imp.stats.columns ?? []).map((c) => [c.source, c]));

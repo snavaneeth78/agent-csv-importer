@@ -48,6 +48,20 @@ Calls the spec left open, made while building, and limits left in on purpose.
 - **Integration tests** use testcontainers, or `TEST_DATABASE_URL` to reuse the compose database.
 - **UI** uses plain CSS instead of shadcn/ui to keep the package dependency-free; the components map 1:1.
 - **Parsing** reads the whole file in memory (capped at 50 MB) instead of streaming.
+- **The mapping review opens before the models answer.** Rule stages take milliseconds; Jev and the LLM take
+  around a second. The review opens after the rules, with the remaining columns under "Still matching" in
+  `plan.pending`, and the model answers merge in afterwards. The merge never overrides a column the user decided
+  while waiting. Gate 1 refuses until the merge is done. An edit sent against the plan from just before the merge
+  is re-applied to the merged plan instead of failing as a conflict.
+- **Jev and the LLM run side by side** on the same columns. Their answers are applied Jev first, so the outcome is
+  the same as running them in sequence. The cost is LLM tokens on columns Jev settles. Model value matching
+  (vendors, brands) starts at the same time, and the final pass reuses those answers.
+- **Model time limits are total budgets.** Jev gets 2 s, the one retry included. A timeout is not retried, and the
+  request is aborted. The column falls back to the LLM's answer, or becomes a question for the user.
+- **The LLM returns field and confidence only.** Output tokens are most of its latency. The field list sits in a
+  fixed system prompt, so the provider can cache it, with a cache breakpoint on Anthropic. Each column carries
+  its five likeliest fields as a hint, not a limit.
+- **Parse and match run in one job.** A second queue hop cost up to one polling interval.
 
 ## Known limitations
 

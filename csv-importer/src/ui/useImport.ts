@@ -21,6 +21,7 @@ export function useImport(importId: string | null, api: ImportApi, opts: { onEve
   const gen = useRef(0);
   const lastId = useRef(0);
   const status = useRef<ImportStatus | null>(null);
+  const matching = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const onEvent = useRef(opts.onEvent);
   onEvent.current = opts.onEvent;
@@ -30,6 +31,7 @@ export function useImport(importId: string | null, api: ImportApi, opts: { onEve
     const v = await api.get(importId);
     if (g !== gen.current) return null;
     status.current = v.status;
+    matching.current = !!v.matching;
     setView(v);
     setError(null);
     return v;
@@ -53,7 +55,8 @@ export function useImport(importId: string | null, api: ImportApi, opts: { onEve
     clearTimeout(timer.current);
     const s = status.current;
     if (g !== gen.current || (s && TERMINAL.includes(s))) return;
-    const delay = s && ACTIVE.includes(s) ? FAST_MS : IDLE_MS;
+    // The review opens before the model answers arrive: poll fast until they're merged.
+    const delay = (s && ACTIVE.includes(s)) || matching.current ? FAST_MS : IDLE_MS;
     timer.current = setTimeout(async () => {
       try {
         if (!status.current) await load(g);

@@ -2,9 +2,9 @@ import { createHash } from "node:crypto";
 import {
   addUsage, type ModelUsage,
   FileRejected, FollowupError, ImportService, Q, buildTable, chunkRanges, emptyPlan, finalizePlan, followupValues, indexCatalog,
-  markFileDuplicates, normSku, normValue, normalizeHeader, parseFile, prepareRows, profileColumns, runCascade, toTemplateRow,
-  type Ctx, type ImportRecord, type ImporterConfig, type Json, type MatchStage, type Question, type Queue, type RowPatch,
-  type RowRecord, type Repos, type Store, type Candidate, type TargetProfile, type ValueStage,
+  markFileDuplicates, memoValueStages, normSku, normValue, normalizeHeader, parseFile, prepareRows, profileColumns, runCascade, toTemplateRow,
+  type CascadeResult, type Ctx, type ImportRecord, type ImporterConfig, type Json, type MappingPlan, type MatchStage, type ModelGuess, type Question,
+  type Queue, type RowPatch, type RowRecord, type Repos, type Store, type Candidate, type TargetProfile, type ValueStage,
 } from "../core/index.ts";
 import { RateLimiter } from "./limiter.ts";
 
@@ -19,6 +19,10 @@ export interface JobDeps {
 }
 
 type Payload = { tenantId: string; importId: string };
+type MatchStats = NonNullable<ImportRecord["stats"]["matchStages"]>;
+
+const isModel = (s: { method: string }) => s.method === "jev" || s.method === "llm";
+const NEEDS_YOU = "Not matched (needs you)";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -56,6 +60,11 @@ export class Jobs {
   async onFinalFailure(name: string, data: Payload, err: unknown) {
     const imp = await this.load(data.tenantId, data.importId).catch(() => null);
     if (!imp || this.d.service.isTerminal(imp.status)) return;
+    if (imp.status === "mapping_review" && imp.plan?.pending) {
+      // The review is already open: the columns still waiting become questions for the user.
+      await this.tx(imp.tenantId, (r) => r.appendEvent(imp.id, "error", "system", { queue: name, message: String((err as Error)?.message ?? err) }));
+      return this.finishMatching(imp, { skipModels: true });
+    }
     if (name === Q.commit || name === Q.followup) {
       // Rows already written stay written. The rows this job never finished are marked, so the import
       // can't end as "completed" with products missing or left inactive.
@@ -90,6 +99,8 @@ export class Jobs {
 
   async parse(data: Payload & { reparse?: boolean }) {
     let imp = await this.load(data.tenantId, data.importId);
+    // A retried job whose parse already finished: carry on with matching.
+    if (imp.status === "matching" || (imp.status === "mapping_review" && imp.plan?.pending)) return this.match(data);
     if (imp.status === "queued") {
       await this.tx(imp.tenantId, async (r) => this.d.service.setStatus(r, (await r.getImport(imp.id, { forUpdate: true }))!, "parsing"));
       imp.status = "parsing";
@@ -156,13 +167,21 @@ export class Jobs {
       await r.appendEvent(imp.id, "chunk_progress", "system", { stage: "parse", rows: table.rows.length, columns: table.headers.length, skippedRows: table.skippedRows });
       await this.d.service.setStatus(r, cur, "matching");
     });
-    await this.d.queue.send(Q.match, { tenantId: imp.tenantId, importId: imp.id }, { singletonKey: `${imp.id}:${Q.match}:${imp.planVersion}` });
+    // Matching runs in this job: a second queue hop costs up to a polling interval before a worker picks it up.
+    await this.match({ tenantId: imp.tenantId, importId: imp.id });
   }
 
   // ------------------------------------------------------------------ csv.match
 
+  /**
+   * Rule stages first; the review opens as soon as they finish (status mapping_review, with the columns still
+   * waiting for a model listed in plan.pending). Then Jev and the LLM run side by side with model value matching,
+   * and their answers are merged into the plan the user may already be editing. Gate 1 waits for the merge.
+   */
   async match(data: Payload) {
     const imp = await this.load(data.tenantId, data.importId);
+    // A retried job after the review opened: only the model part is left.
+    if (imp.status === "mapping_review" && imp.plan?.pending) return this.finishMatching(imp);
     if (imp.status !== "matching") return;
     const profile = this.d.service.profile(imp.targetId);
     const ctx = this.ctx(imp);
@@ -184,19 +203,131 @@ export class Jobs {
     const refs = await profile.refResolver.resolve(ctx, refFields, { snapshotDistinct: (f) => this.tx(imp.tenantId, (r) => r.snapshotDistinct(f)) });
     lap("refs", t);
 
-    // Time each stage and record what it decided, for the "How it ran" view.
-    const matchStages: NonNullable<ImportRecord["stats"]["matchStages"]> = [];
+    const matchStages: MatchStats = [];
     const disabledStages = this.d.service.disabledStages();
-    const stages: MatchStage[] = this.d.stages.filter((s) => this.d.service.stageEnabled(s.method)).map((s) => ({
+    const enabled = this.d.stages.filter((s) => this.d.service.stageEnabled(s.method));
+    const models = enabled.filter(isModel);
+    t = Date.now();
+    const result = await runCascade({
+      ctx, target: profile.target, columns, memory, config: this.d.config, stages: this.timed(enabled.filter((s) => !isModel(s)), matchStages),
+      onResolved: (m) => this.resolvedEvent(imp, m),
+    });
+    lap("cascade", t);
+    this.recordResolved(matchStages, result);
+    t = Date.now();
+    plan.fields = result.fields;
+    plan.ignoredColumns = [...result.ignored, ...(models.length ? [] : result.unresolved.map((c) => ({ source: c.source, reason: NEEDS_YOU })))];
+    if (models.length && result.unresolved.length) plan.pending = { columns: result.unresolved.map((c) => c.source), fields: [] };
+    const usage: Record<string, ModelUsage> = {};
+    const valueStages = memoValueStages(this.d.service.activeValueStages());
+    const finalized = await finalizePlan(plan, {
+      profile, columns, refs, valueStages, deferModels: true,
+      onUsage: (method, u) => { usage[`${method}:values`] = addUsage(usage[`${method}:values`], u); },
+      distinct: (src) => this.tx(imp.tenantId, (r) => r.distinctRaw(imp.id, src, 1000)),
+    });
+    lap("plan", t);
+    timings.review = Date.now() - t0;
+
+    const opened = await this.tx(imp.tenantId, async (r) => {
+      const cur = (await r.getImport(imp.id, { forUpdate: true }))!;
+      if (cur.status !== "matching") return null;
+      const stats = { ...cur.stats, columns, resolvedByStage: { ...result.byStage, unresolved: result.unresolved.length } as any, matchMs: Date.now() - t0, timings, matchStages, usage, disabledStages };
+      await r.updateImport(imp.id, { plan: finalized, planVersion: cur.planVersion + 1, refs, stats });
+      for (const q of finalized.questions) await r.appendEvent(imp.id, "question_added", "system", { id: q.id, kind: q.kind, blocking: q.blocking });
+      await this.d.service.setStatus(r, cur, "mapping_review", "system", finalized.pending ? { matching: finalized.pending.columns.length } : {});
+      return { ...cur, plan: finalized, planVersion: cur.planVersion + 1, refs, stats };
+    });
+    if (opened?.plan?.pending) await this.finishMatching(opened, { valueStages, startedAt: t0 });
+  }
+
+  /**
+   * The model half of matching, after the review opened. Runs Jev and the LLM on the waiting columns while model
+   * value matching runs on what's already mapped, then merges the answers into the current plan: only columns
+   * the user hasn't decided meanwhile, and only into fields still free. A column with no answer becomes a question.
+   */
+  private async finishMatching(imp: ImportRecord, opts: { valueStages?: ValueStage[]; startedAt?: number; skipModels?: boolean } = {}) {
+    const profile = this.d.service.profile(imp.targetId);
+    const ctx = this.ctx(imp);
+    const t0 = Date.now();
+    const plan = imp.plan!;
+    const columns = imp.stats.columns ?? [];
+    const refs = imp.refs ?? {};
+    const active = this.d.service.activeValueStages();
+    const valueStages = opts.valueStages ?? memoValueStages(opts.skipModels ? active.filter((s) => !isModel(s)) : active);
+    const matchStages: MatchStats = [];
+    const usage: Record<string, ModelUsage> = {};
+    const onUsage = (method: string, u: ModelUsage) => { usage[`${method}:values`] = addUsage(usage[`${method}:values`], u); };
+    const distinct = (src: string) => this.tx(imp.tenantId, (r) => r.distinctRaw(imp.id, src, 1000));
+    const models = opts.skipModels ? [] : this.d.stages.filter((s) => isModel(s) && this.d.service.stageEnabled(s.method));
+    const waiting = columns.filter((c) => plan.pending?.columns.includes(c.source));
+
+    const [res] = await Promise.all([
+      waiting.length && models.length
+        ? runCascade({
+          ctx, target: profile.target, columns: waiting, memory: [], config: this.d.config, stages: this.timed(models, matchStages),
+          claimed: plan.fields.map((m) => m.target), onResolved: (m) => this.resolvedEvent(imp, m),
+        })
+        : Promise.resolve(null),
+      // Value matching for fields already mapped starts now; the final pass below reuses these answers.
+      plan.pending?.fields.length && !opts.skipModels
+        ? finalizePlan(structuredClone(plan), { profile, columns, refs, valueStages, onUsage, distinct }).catch(() => null)
+        : null,
+    ]);
+    if (res) this.recordResolved(matchStages, res);
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const cur = await this.load(imp.tenantId, imp.id);
+      if (cur.status !== "mapping_review" || !cur.plan?.pending) return;
+      const merged = mergeModelAnswers(cur.plan, res, matchStages);
+      const finalized = await finalizePlan(merged, { profile, columns, refs, valueStages, onUsage, distinct });
+      const done = await this.tx(imp.tenantId, async (r) => {
+        const now = (await r.getImport(imp.id, { forUpdate: true }))!;
+        if (now.status !== "mapping_review" || !now.plan?.pending) return true;
+        if (now.planVersion !== cur.planVersion) return false; // the user changed the plan meanwhile: merge into theirs
+        const st = now.stats;
+        const byStage: Record<string, number> = { ...(st.resolvedByStage ?? {}) };
+        for (const [k, n] of Object.entries(res?.byStage ?? {})) byStage[k] = (byStage[k] ?? 0) + (n ?? 0);
+        byStage.unresolved = finalized.ignoredColumns.filter((i) => i.reason === NEEDS_YOU).length;
+        const allUsage = { ...(st.usage ?? {}) };
+        for (const [k, u] of Object.entries(usage)) allUsage[k] = addUsage(allUsage[k], u);
+        for (const s of matchStages) if (s.usage) allUsage[`${s.method}:columns`] = addUsage(allUsage[`${s.method}:columns`], s.usage);
+        const ms = Date.now() - t0;
+        const stats = {
+          ...st, usage: allUsage, resolvedByStage: byStage as any, matchStages: [...(st.matchStages ?? []), ...matchStages],
+          timings: { ...(st.timings ?? {}), models: ms }, matchMs: opts.startedAt ? Date.now() - opts.startedAt : (st.matchMs ?? 0) + ms,
+          modelMerge: { from: now.planVersion, to: now.planVersion + 1 },
+        };
+        await r.updateImport(imp.id, { plan: finalized, planVersion: now.planVersion + 1, stats });
+        const before = new Set(now.plan.questions.map((q) => q.id));
+        for (const q of finalized.questions) if (!before.has(q.id)) await r.appendEvent(imp.id, "question_added", "system", { id: q.id, kind: q.kind, blocking: q.blocking });
+        await r.appendEvent(imp.id, "plan_revised", "system", { changed: ["model answers"], resolved: res?.fields.length ?? 0 });
+        // Same status, new milestone: the agent tells the user the review is complete.
+        await this.d.service.setStatus(r, now, "mapping_review", "system", { reason: "matching finished" });
+        return true;
+      });
+      if (done) return;
+    }
+    throw new Error("The mapping kept changing while model answers were being merged");
+  }
+
+  private resolvedEvent(imp: ImportRecord, m: { sources: string[]; target: string; method: string; score: number }) {
+    return this.tx(imp.tenantId, (r) => r.appendEvent(imp.id, "column_resolved", "system", { source: m.sources[0], target: m.target, method: m.method, score: m.score })).then(() => undefined);
+  }
+
+  /** Time each stage and record what it decided, for the "How it ran" view. Entries keep stage order even when stages overlap. */
+  private timed(stages: MatchStage[], out: MatchStats): MatchStage[] {
+    return stages.map((s) => ({
       ...s,
       run: async (input) => {
+        const entry: MatchStats[number] = { method: s.method, model: s.model, ms: 0, seen: input.columns.length, resolved: [], ignored: [] };
+        out.push(entry);
         const st = Date.now();
         const res = await s.run(input);
         const ok = res.candidates.filter((c) => c.score >= s.threshold || (c.suggest && c.target));
         const best = new Map<string, Candidate>();
         for (const c of res.candidates) if (c.score < s.threshold && c.score > 0 && (!best.has(c.source) || best.get(c.source)!.score < c.score)) best.set(c.source, c);
-        matchStages.push({
-          method: s.method, model: s.model, ms: Date.now() - st, seen: input.columns.length, resolved: [],
+        Object.assign(entry, {
+          ms: Date.now() - st,
           ignored: ok.filter((c) => c.target === null).map((c) => c.source),
           ...(res.error ? { error: res.error } : {}),
           ...(res.usage ? { usage: res.usage } : {}),
@@ -205,51 +336,14 @@ export class Jobs {
         return res;
       },
     }));
-    t = Date.now();
+  }
 
-    const result = await runCascade({
-      ctx, target: profile.target, columns, memory, config: this.d.config, stages,
-      onResolved: (m) => this.tx(imp.tenantId, (r) => r.appendEvent(imp.id, "column_resolved", "system", { source: m.sources[0], target: m.target, method: m.method, score: m.score })).then(() => undefined),
-    });
-    lap("cascade", t);
+  private recordResolved(matchStages: MatchStats, result: CascadeResult) {
     for (const m of result.fields) {
       const st = matchStages.find((s) => s.method === m.method);
       if (m.needsConfirm) (st!.suggested ??= []).push(m.sources[0]);
       else st?.resolved.push(m.sources[0]);
     }
-    t = Date.now();
-    plan.fields = result.fields;
-    // Best model guess per unresolved column (Jev first, then LLM), offered as the pre-selected answer.
-    const guessFor = (source: string) => {
-      for (const st of matchStages) {
-        const n = st.nearMisses?.find((x) => x.source === source);
-        if (n) return { target: n.target, score: n.score, method: st.method };
-      }
-      return undefined;
-    };
-    plan.ignoredColumns = [
-      ...result.ignored,
-      ...result.unresolved.map((c) => ({ source: c.source, reason: "Not matched (needs you)", ...(guessFor(c.source) ? { guess: guessFor(c.source) } : {}) })),
-    ];
-    const usage: Record<string, ModelUsage> = {};
-    for (const s of matchStages) if (s.usage) usage[`${s.method}:columns`] = addUsage(usage[`${s.method}:columns`], s.usage);
-    const finalized = await finalizePlan(plan, {
-      profile, columns, refs, valueStages: this.d.service.activeValueStages(),
-      onUsage: (method, u) => { usage[`${method}:values`] = addUsage(usage[`${method}:values`], u); },
-      distinct: (src) => this.tx(imp.tenantId, (r) => r.distinctRaw(imp.id, src, 1000)),
-    });
-
-    lap("plan", t);
-    await this.tx(imp.tenantId, async (r) => {
-      const cur = (await r.getImport(imp.id, { forUpdate: true }))!;
-      if (cur.status !== "matching") return;
-      await r.updateImport(imp.id, {
-        plan: finalized, planVersion: cur.planVersion + 1, refs,
-        stats: { ...cur.stats, columns, resolvedByStage: { ...result.byStage, unresolved: result.unresolved.length } as any, matchMs: Date.now() - t0, timings, matchStages, usage, disabledStages },
-      });
-      for (const q of finalized.questions) await r.appendEvent(imp.id, "question_added", "system", { id: q.id, kind: q.kind, blocking: q.blocking });
-      await this.d.service.setStatus(r, cur, "mapping_review");
-    });
   }
 
   // ------------------------------------------------------------------ catalog snapshot
@@ -566,4 +660,34 @@ export class Jobs {
       await this.d.service.setStatus(r, cur, to, "system", { committed, failed });
     });
   }
+}
+
+/**
+ * Model answers into the plan as it is now. Columns the user mapped or ignored meanwhile keep the user's choice;
+ * an answer whose field the user gave to another column becomes a question. Columns with no answer become
+ * questions, with the best model guess pre-selected (Jev first, then the LLM).
+ */
+export function mergeModelAnswers(plan: MappingPlan, res: CascadeResult | null, stages: MatchStats): MappingPlan {
+  const merged = structuredClone(plan);
+  const waiting = new Set(merged.pending?.columns ?? []);
+  const taken = new Set(merged.fields.map((m) => m.target));
+  const guessFor = (source: string): ModelGuess | undefined => {
+    for (const st of stages) {
+      const n = st.nearMisses?.find((x) => x.source === source);
+      if (n) return { target: n.target, score: n.score, method: st.method };
+    }
+    return undefined;
+  };
+  const needsYou = (source: string, guess = guessFor(source)) => ({ source, reason: NEEDS_YOU, ...(guess ? { guess } : {}) });
+  for (const m of res?.fields ?? []) {
+    const src = m.sources[0];
+    if (!waiting.delete(src)) continue;
+    if (taken.has(m.target)) { merged.ignoredColumns.push(needsYou(src, { target: m.target, score: m.score, method: m.method })); continue; }
+    merged.fields.push(m);
+    taken.add(m.target);
+  }
+  for (const ig of res?.ignored ?? []) if (waiting.delete(ig.source)) merged.ignoredColumns.push(ig);
+  for (const src of waiting) merged.ignoredColumns.push(needsYou(src));
+  delete merged.pending;
+  return merged;
 }

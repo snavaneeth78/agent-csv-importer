@@ -41,6 +41,8 @@ export interface ImportStats {
     nearMisses?: { source: string; target: string | null; score: number }[];
   }[];
   confirmingMessageIds?: string[];
+  /** The last plan version written by the model merge, and the version it was built on. */
+  modelMerge?: { from: number; to: number };
 }
 
 export interface ImportRecord {
@@ -236,6 +238,11 @@ export interface MatchStage {
   /** Model behind the stage (Jev/LLM), "stub" for deterministic stand-ins. */
   model?: string;
   threshold: number;
+  /**
+   * Runs at the same time as the neighbouring concurrent stages, on the same columns; answers are then applied in
+   * stage order, so an earlier stage still wins. The wait is the slowest call instead of the sum.
+   */
+  concurrent?: boolean;
   /** `error` means the stage couldn't run (model call failed); its columns fall through to the next stage. */
   run(input: StageInput): Promise<{ candidates: Candidate[]; final?: boolean; error?: string; usage?: ModelUsage }>;
 }
@@ -277,9 +284,13 @@ export interface PlanPatch {
 export interface LlmMatcher {
   readonly modelId?: string;
   mapColumns(input: {
-    columns: { source: string; samples: string[]; typeSig: string }[];
+    /** `likely`: a short list of free fields whose names or value types fit the column best. A hint, not a limit. */
+    columns: { source: string; samples: string[]; typeSig: string; likely?: string[] }[];
+    /** Every field of the target in a fixed order. The same for every call, so the provider can cache it. */
     fields: { name: string; label: string; type: string; synonyms: string[] }[];
-  }, opts?: CallOpts): Promise<{ source: string; target: string | null; confidence: number; rationale: string }[]>;
+    /** Fields other columns already use; an answer naming one is dropped. */
+    taken?: string[];
+  }, opts?: CallOpts): Promise<{ source: string; target: string | null; confidence: number; rationale?: string }[]>;
   mapValues(input: { field: string; values: string[]; allowed: string[] }, opts?: CallOpts): Promise<Record<string, string | null>>;
   planPatch(input: { instruction: string; headers: string[]; fields: { name: string; label: string }[]; plan: Json }, opts?: CallOpts): Promise<PlanPatch>;
 }

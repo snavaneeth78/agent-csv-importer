@@ -78,18 +78,31 @@ describe("mapping cascade (§4.1)", () => {
     expect(by["CBD Level"]).toBe("total_cbd/pattern");
   });
 
-  test("Jev bands: >= 0.75 accepted, 0.40-0.75 suggested (skips the LLM), below or 'none' goes to the LLM", async () => {
+  test("Jev bands: >= 0.75 accepted, 0.40-0.75 suggested, below or 'none' left to the LLM", async () => {
     const jev = { modelId: "t", choose: async (items: { id: string }[]): Promise<Record<string, Record<string, number>>> => Object.fromEntries(items.map((it) => [it.id,
       (it.id === "Amt" ? { unit_price: 0.9 } : it.id === "Count" ? { units_per_case: 0.57, none: 0.3 } : { none: 0.6, unit_cost: 0.2 }) as Record<string, number>])) };
     const seen: string[] = [];
-    const llm = { modelId: "t", mapColumns: async (i: { columns: { source: string }[] }) => { seen.push(...i.columns.map((c) => c.source)); return []; }, mapValues: async () => ({}), planPatch: async () => ({}) };
+    // The LLM runs alongside Jev on the same columns and disagrees on all of them: Jev's answers still win.
+    const llm = { modelId: "t", planPatch: async () => ({}), mapValues: async () => ({}),
+      mapColumns: async (i: { columns: { source: string }[] }) => { seen.push(...i.columns.map((c) => c.source)); return i.columns.map((c) => ({ source: c.source, target: "msrp", confidence: 0.9 })); } };
     const columns = profileColumns(["Name", "Amt", "Count", "Value"], [{ Name: "A", Amt: "45", Count: "12", Value: "9" }]);
     const res = await runCascade({ ctx, target: productSchema, columns, memory: [], config, stages: defaultStages({ config, jev, llm }) });
     expect(res.fields.find((f) => f.sources[0] === "Amt")).toMatchObject({ target: "unit_price", method: "jev" });
     expect(res.fields.find((f) => f.sources[0] === "Amt")?.needsConfirm).toBeUndefined();
-    expect(res.fields.find((f) => f.sources[0] === "Count")).toMatchObject({ target: "units_per_case", needsConfirm: true });
-    // "not a field" on top below the bar: the LLM gets it. Count (a suggestion) never reaches the LLM.
-    expect(seen).toEqual(["Value"]);
+    expect(res.fields.find((f) => f.sources[0] === "Count")).toMatchObject({ target: "units_per_case", method: "jev", needsConfirm: true });
+    // "not a field" on top below the bar: the LLM's answer is used.
+    expect(res.fields.find((f) => f.sources[0] === "Value")).toMatchObject({ target: "msrp", method: "llm" });
+    expect(seen).toEqual(["Amt", "Count", "Value"]);
+  });
+
+  test("Jev and the LLM run at the same time: the wait is the slower call, not the sum", async () => {
+    const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const jev = { modelId: "t", choose: async (items: { id: string }[]) => { await wait(150); return Object.fromEntries(items.map((it) => [it.id, { none: 0.9 }])); } };
+    const llm = { modelId: "t", planPatch: async () => ({}), mapValues: async () => ({}), mapColumns: async () => { await wait(150); return []; } };
+    const columns = profileColumns(["Name", "Zzz"], [{ Name: "A", Zzz: "q" }]);
+    const t0 = Date.now();
+    await runCascade({ ctx, target: productSchema, columns, memory: [], config, stages: defaultStages({ config, jev, llm }) });
+    expect(Date.now() - t0).toBeLessThan(280);
   });
 
   test("a failed model call is reported, not silent", async () => {

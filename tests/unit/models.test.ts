@@ -20,7 +20,7 @@ test("openrouter: LLM via chat completions, Jev via the Decisions API", async ()
   expect(m.llm).toBeInstanceOf(LangChainLlm);
   expect(m.jev).toBeInstanceOf(JevClient);
   expect(m.real).toEqual({ llm: "openrouter:anthropic/claude-sonnet-4.5", jev: "openrouter:typesafe/jev-1.14" });
-  expect(m.timeoutMs).toEqual({ llm: 30_000, jev: 5_000 });
+  expect(m.timeoutMs).toEqual({ llm: 30_000, jev: 2_000 });
 });
 
 test("a non-Jev JEV_MODEL falls back to the LLM stand-in", async () => {
@@ -69,4 +69,69 @@ test("usage and cost: Jev sums usage across requests and prices input tokens; kn
   } finally {
     globalThis.fetch = orig;
   }
+});
+
+test("gateway: the budget covers the retry; a timeout isn't retried and aborts the request", async () => {
+  const { gateway } = await import("@distru/csv-importer/scorers");
+  let calls = 0;
+  let aborted = false;
+  const t0 = Date.now();
+  await expect(gateway("jev", 120, (signal) => { calls++; signal.addEventListener("abort", () => (aborted = true)); return new Promise(() => {}); })).rejects.toThrow(/timed out after 120ms/);
+  expect(calls).toBe(1);
+  expect(aborted).toBe(true);
+  expect(Date.now() - t0).toBeLessThan(400);
+
+  // A fast transient failure is retried with what's left of the budget.
+  calls = 0;
+  expect(await gateway("jev", 2000, async () => { if (++calls === 1) throw Object.assign(new Error("busy"), { status: 503 }); return "ok"; })).toBe("ok");
+  expect(calls).toBe(2);
+  // A bad request is not.
+  calls = 0;
+  await expect(gateway("jev", 2000, async () => { calls++; throw Object.assign(new Error("bad"), { status: 400 }); })).rejects.toThrow("bad");
+  expect(calls).toBe(1);
+});
+
+test("LLM column call: field list in a stable system prompt, no rationale asked for, cache breakpoint on Anthropic", async () => {
+  const { llmStage } = await import("@distru/csv-importer/scorers");
+  const { productSchema } = await import("@distru/csv-importer/distru");
+  const { profileColumns, resolveConfig } = await import("@distru/csv-importer/core");
+  const seen: { system: any; human: string; keys: string[] }[] = [];
+  const fake = {
+    model: "fake",
+    withStructuredOutput: (schema: any) => ({
+      invoke: async (msgs: any[]) => {
+        seen.push({ system: msgs[0].content, human: String(msgs[1].content), keys: Object.keys(schema.shape.mappings.element.shape) });
+        return { raw: { usage_metadata: { input_tokens: 1, output_tokens: 1 } }, parsed: { mappings: [{ source: "Cultivar", target: "strain", confidence: 0.9 }] } };
+      },
+    }),
+  } as any;
+  const config = resolveConfig();
+  const run = async (llm: LangChainLlm, header: string) => {
+    const columns = profileColumns([header], [{ [header]: "Blue Dream" }]);
+    const fields = Object.values(productSchema.fields).filter((f) => f.name !== "name");
+    return llmStage(llm, config).run({ ctx: { tenantId: "t", actor: "a" }, target: productSchema, columns, fields, allColumns: columns, memory: [], config });
+  };
+  const res = await run(new LangChainLlm(fake, "jsonSchema", "fake"), "Cultivar");
+  await run(new LangChainLlm(fake, "jsonSchema", "fake"), "Lineage");
+  expect(seen[0].keys).toEqual(["source", "target", "confidence"]);
+  expect(seen[0].system).toBe(seen[1].system);
+  expect(seen[0].system).toContain("- strain | Strain |");
+  expect(seen[0].human).toContain("never pick these): name");
+  expect(seen[0].human).toContain('"likely":[');
+  expect(res.candidates[0]).toMatchObject({ source: "Cultivar", target: "strain", rationale: "LLM: picked strain (90%)" });
+
+  await run(new LangChainLlm(fake, "jsonSchema", "fake", undefined, true), "Cultivar");
+  expect(seen[2].system[0]).toMatchObject({ type: "text", cache_control: { type: "ephemeral" } });
+  expect(seen[2].system[0].text).toBe(seen[0].system);
+});
+
+test("shortlist: the right field is in a column's top five", async () => {
+  const { shortlist } = await import("@distru/csv-importer/scorers");
+  const { productSchema } = await import("@distru/csv-importer/distru");
+  const { profileColumns } = await import("@distru/csv-importer/core");
+  const fields = Object.values(productSchema.fields);
+  const [c] = profileColumns(["Wholesale Cost"], [{ "Wholesale Cost": "12.50" }]);
+  const top = shortlist(c, fields);
+  expect(top).toHaveLength(5);
+  expect(top).toContain("wholesale_price");
 });

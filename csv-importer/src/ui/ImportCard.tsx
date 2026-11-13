@@ -71,7 +71,8 @@ function Card({ importId, api, onEvent, onView, onOpenImport, onDismiss }: Omit<
         </div>
         <div className="ci-meta">
           {rows > 0 && <span>{fmtNum(rows)} rows</span>}
-          {dev && view.plan && (
+          {/* Confidence covers mapped columns only, so it would overstate while some are still being matched. */}
+          {dev && view.plan && !view.matching && (
             <span className="ci-conf">
               <span className={`ci-dot ci-dot-${confidenceTone(view.overallConfidence)}`} />
               {Math.round(view.overallConfidence * 100)}% confidence

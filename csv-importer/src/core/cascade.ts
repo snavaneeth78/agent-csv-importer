@@ -47,7 +47,8 @@ export function defaultTransforms(field: FieldDef, col?: ColumnProfile): Transfo
 /**
  * Runs each unresolved column through the stages in order (§4.1). A column stops at the first stage that
  * clears its threshold. A target is claimed by one column; on a conflict the higher score wins and the
- * loser drops to the next stage.
+ * loser drops to the next stage. Consecutive `concurrent` stages (Jev, LLM) are called together on the same
+ * columns and applied in order, so the wait is the slowest of them rather than the sum.
  */
 export async function runCascade(input: {
   ctx: Ctx;
@@ -56,13 +57,15 @@ export async function runCascade(input: {
   memory: MemoryEntry[];
   config: ImporterConfig;
   stages: MatchStage[];
+  /** Targets already taken (by an earlier pass over the same file). */
+  claimed?: string[];
   onResolved?: (m: FieldMapping) => void | Promise<void>;
 }): Promise<CascadeResult> {
   const { target, config } = input;
   const fields: FieldMapping[] = [];
   const ignored: CascadeResult["ignored"] = [];
   const byStage: CascadeResult["byStage"] = {};
-  const claimed = new Set<string>();
+  const claimed = new Set<string>(input.claimed);
   const ignoredTpl = new Map(target.ignoredHeaders.map((i) => [normalizeHeader(i.header), i.reason]));
 
   // A file in Distru's own template keeps its empty columns mapped (blank cells can clear values).
@@ -75,16 +78,14 @@ export async function runCascade(input: {
     else unresolved.push(c);
   }
 
-  for (const stage of input.stages) {
-    if (unresolved.length === 0) break;
-    const open = Object.values(target.fields).filter((f) => !claimed.has(f.name));
-    const { candidates, final } = await stage.run({
-      ctx: input.ctx, target, columns: unresolved, fields: open, allColumns: input.columns, memory: input.memory, config,
-    });
+  /** Applies one stage's answers to the columns still unresolved. */
+  const apply = async (stage: MatchStage, candidates: Candidate[]) => {
     const accepted = candidates.filter((c) => c.score >= stage.threshold || (c.suggest && c.target)).sort((a, b) => b.score - a.score);
     const done = new Set<string>();
     for (const c of accepted) {
       if (done.has(c.source)) continue;
+      const col = unresolved.find((u) => u.source === c.source);
+      if (!col) continue; // an earlier stage of the same concurrent group took it
       if (c.target === null) {
         ignored.push({ source: c.source, reason: c.rationale });
         byStage.none = (byStage.none ?? 0) + 1;
@@ -92,7 +93,6 @@ export async function runCascade(input: {
         continue;
       }
       if (claimed.has(c.target) || !target.fields[c.target]) continue;
-      const col = unresolved.find((u) => u.source === c.source)!;
       const m: FieldMapping = {
         target: c.target,
         sources: [c.source],
@@ -109,7 +109,17 @@ export async function runCascade(input: {
       await input.onResolved?.(m);
     }
     unresolved = unresolved.filter((u) => !done.has(u.source));
-    if (final) break;
+  };
+
+  const stages = input.stages;
+  for (let i = 0; i < stages.length && unresolved.length > 0;) {
+    const group = [stages[i++]];
+    while (group[0].concurrent && i < stages.length && stages[i].concurrent) group.push(stages[i++]);
+    const open = Object.values(target.fields).filter((f) => !claimed.has(f.name));
+    const runInput = { ctx: input.ctx, target, columns: unresolved, fields: open, allColumns: input.columns, memory: input.memory, config };
+    const results = await Promise.all(group.map((s) => s.run(runInput)));
+    for (const [k, stage] of group.entries()) await apply(stage, results[k].candidates);
+    if (results.some((r) => r.final)) break;
   }
   return { fields, ignored, unresolved, byStage };
 }

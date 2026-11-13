@@ -102,6 +102,7 @@ export function createAgent(deps: { importer: ImportService; tools: StructuredTo
         // "import only the new ones" are edits and go to the revise path below.
         if (/^(yes|y|yep|yeah|ok|okay|confirm|looks good|go|go ahead|import( it)?|do it)[\s.!]*$/.test(t)) {
           if (atGate1) {
+            if (v.matching) { say(`Still matching ${v.matching.columns?.length ? `${v.matching.columns.length} column(s)` : "some values"}; give it a few seconds, then say "yes" again.`); return out; }
             if (v.blockingQuestions) { say(`I need ${v.blockingQuestions} answer(s) first.\n\n${questionList(v)}`); return out; }
             await call("import_csv_confirm_mapping", { importId, planVersion: v.planVersion }, threadId, user.id);
             say("Mapping confirmed. Checking every row and looking for duplicates.");
@@ -196,7 +197,8 @@ export function createAgent(deps: { importer: ImportService; tools: StructuredTo
     /** System-started turn (harness.run): one message per milestone. */
     systemTurn(threadId: string, v: ImportView) {
       if (!["mapping_review", "commit_review", "completed", "partially_completed", "failed", "cancelled"].includes(v.status)) return;
-      const key = `${v.id}:${v.status}`;
+      // The review opens before the model answers are in, then completes: one message for each.
+      const key = `${v.id}:${v.status}${v.matching ? ":matching" : ""}`;
       if (lastSystem.get(threadId) === key) return;
       lastSystem.set(threadId, key);
       post(threadId, "assistant", describe(v), v.id);
@@ -235,6 +237,8 @@ function describe(v: any): string {
     case "mapping_review": {
       const fields = (v.plan?.fields ?? v.mapped ?? []).filter((m: any) => !m.rationale?.startsWith?.("derived:"));
       const open = v.openQuestions?.length ?? 0;
+      const waiting = v.matching?.columns?.length ?? 0;
+      if (v.matching) return `I mapped ${fields.length} columns so far and I'm still matching ${waiting ? `${waiting} more` : "a few names against your Distru lists"}; the card fills them in as they arrive.${open ? ` ${open} question(s) are ready for you meanwhile.` : ""}`;
       return `I mapped ${fields.length} columns (confidence ${Math.round((v.overallConfidence ?? v.confidence ?? 0) * 100)}%). ${open ? `${open} question(s) need you; ask "what do you need?" to answer them here, or use the card. ` : ""}Say "yes" to confirm the mapping, or tell me what to change.`;
     }
     case "commit_review": {

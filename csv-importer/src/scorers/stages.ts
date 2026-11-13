@@ -174,16 +174,17 @@ export function jevStage(jev: ChoiceScorer, config: ImporterConfig): MatchStage 
   return {
     method: "jev",
     model: jev.modelId,
+    concurrent: true,
     threshold: config.matching.thresholds.jev,
     async run({ columns, fields }) {
       let error: string | undefined;
       let usage: ModelUsage | undefined;
-      const probs = await gateway("jev", config.scorers.timeoutMs.jev, () =>
+      const probs = await gateway("jev", config.scorers.timeoutMs.jev, (signal) =>
         jev.choose(columns.map((c) => ({
           id: c.source,
           state: { header: c.source, samples: c.samples, valueType: c.typeSig },
           options: [...fields.map(fieldOption), { id: "none", label: "Not a product field" }],
-        })), { onUsage: (u) => (usage = addUsage(usage, u)) }),
+        })), { onUsage: (u) => (usage = addUsage(usage, u)), signal }),
       ).catch((e) => { error = redact(e); return null; });
       if (!probs) return { candidates: [], error, usage };
       const out: Candidate[] = [];
@@ -210,20 +211,43 @@ export function redact(e: unknown): string {
   return String((e as Error)?.message ?? e).replace(/\b(sk|pk|tsk|ts)[-_][A-Za-z0-9_*-]{6,}/g, "[key]").replace(/\b(Bearer\s+|(?:api[-_ ]?)?key\s*(?:provided)?[=:]\s*)\S+/gi, "$1[key]").split("\n")[0].slice(0, 200);
 }
 
+/**
+ * The free fields that fit a column best: name similarity to any of the field's names, plus a bonus when the
+ * column's values can fill the field. A hint for the LLM; recall matters more than order.
+ */
+export function shortlist(c: ColumnProfile, fields: FieldDef[], n = 5): string[] {
+  return fields
+    .map((f) => ({ f, s: (typeCompatible(f, c.typeSig) ? 0.2 : 0) + Math.max(0, ...names(f).map((x) => Math.max(jaroWinkler(c.headerNorm, x), tokenSet(c.headerNorm, x)))) }))
+    .sort((a, b) => b.s - a.s)
+    .slice(0, n)
+    .map((x) => x.f.name);
+}
+
+/** The whole target as the LLM sees it. Built once per target so the prompt prefix is byte-identical across calls. */
+const catalogs = new WeakMap<object, Parameters<LlmMatcher["mapColumns"]>[0]["fields"]>();
+function llmCatalog(target: { fields: Record<string, FieldDef> }) {
+  let c = catalogs.get(target);
+  if (!c) catalogs.set(target, (c = Object.values(target.fields).map((f) => ({ name: f.name, label: f.header ?? f.name, type: describeField(f), synonyms: f.synonyms }))));
+  return c;
+}
+
 /** Stage 6: the LLM sees only what is still unresolved (headers + samples). */
 export function llmStage(llm: LlmMatcher, config: ImporterConfig): MatchStage {
   return {
     method: "llm",
     model: llm.modelId,
+    concurrent: true,
     threshold: config.matching.thresholds.llm,
-    async run({ columns, fields }) {
+    async run({ columns, fields, target }) {
       let error: string | undefined;
       let usage: ModelUsage | undefined;
-      const res = await gateway("llm", config.scorers.timeoutMs.llm, () =>
+      const free = new Set(fields.map((f) => f.name));
+      const res = await gateway("llm", config.scorers.timeoutMs.llm, (signal) =>
         llm.mapColumns({
-          columns: columns.map((c) => ({ source: c.source, samples: c.samples.slice(0, 5), typeSig: c.typeSig })),
-          fields: fields.map((f) => ({ name: f.name, label: f.header ?? f.name, type: describeField(f), synonyms: f.synonyms })),
-        }, { onUsage: (u) => (usage = addUsage(usage, u)) }),
+          columns: columns.map((c) => ({ source: c.source, samples: c.samples.slice(0, 5), typeSig: c.typeSig, likely: shortlist(c, fields) })),
+          fields: llmCatalog(target),
+          taken: Object.keys(target.fields).filter((n) => !free.has(n)),
+        }, { onUsage: (u) => (usage = addUsage(usage, u)), signal }),
       ).catch((e) => { error = redact(e); return null; });
       if (!res) return { candidates: [], error, usage };
       const open = new Set(fields.map((f) => f.name));
@@ -232,7 +256,12 @@ export function llmStage(llm: LlmMatcher, config: ImporterConfig): MatchStage {
         candidates: res
           .filter((r) => columns.some((c) => c.source === r.source) && (r.target === null || open.has(r.target)))
           // An unsure answer is a suggestion the user confirms at Gate 1; an unsure "not a field" drops nothing.
-          .map((r) => ({ source: r.source, target: r.target, score: Math.max(0, Math.min(1, r.confidence)), suggest: r.target !== null, rationale: `LLM: ${r.rationale}` })),
+          .map((r) => {
+            const score = Math.max(0, Math.min(1, r.confidence));
+            // The real LLM returns no rationale (output tokens are most of its latency); stubs may still give one.
+            const why = r.rationale ?? (r.target === null ? "not a product field" : `picked ${r.target} (${Math.round(score * 100)}%)`);
+            return { source: r.source, target: r.target, score, suggest: r.target !== null, rationale: `LLM: ${why}` };
+          }),
       };
     },
   };
@@ -287,7 +316,7 @@ export function jevValueStage(jev: ChoiceScorer, config: ImporterConfig): ValueS
     async run({ field, values, allowed }, opts) {
       if (!allowed.length || !values.length) return [];
       const items = values.map((v) => ({ id: v, state: { field: field.header ?? field.name, value: v }, options: [...nearest(v, allowed, 5).map((a) => ({ id: a, label: a })), { id: "none", label: "None of these" }] }));
-      const probs = await gateway("jev", config.scorers.timeoutMs.jev, () => jev.choose(items, opts)).catch(() => null);
+      const probs = await gateway("jev", config.scorers.timeoutMs.jev, (signal) => jev.choose(items, { ...opts, signal })).catch(() => null);
       if (!probs) return [];
       const out = [];
       for (const v of values) {
@@ -304,7 +333,7 @@ export function llmValueStage(llm: LlmMatcher, config: ImporterConfig): ValueSta
     method: "llm",
     async run({ field, values, allowed }, opts) {
       if (!allowed.length || !values.length) return [];
-      const res = await gateway("llm", config.scorers.timeoutMs.llm, () => llm.mapValues({ field: field.header ?? field.name, values, allowed }, opts)).catch(() => null);
+      const res = await gateway("llm", config.scorers.timeoutMs.llm, (signal) => llm.mapValues({ field: field.header ?? field.name, values, allowed }, { ...opts, signal })).catch(() => null);
       if (!res) return [];
       return values.filter((v) => res[v] && allowed.includes(res[v]!)).map((v) => ({ value: v, match: res[v]!, score: 0.8 }));
     },

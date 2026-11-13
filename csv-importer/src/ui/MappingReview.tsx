@@ -25,12 +25,17 @@ interface Row {
   derived: FieldMapping[];
   valueMaps: [string, ValueMapT][];
   questions: Question[];
+  /** A model is still reading this column. */
+  matching?: boolean;
+  /** Mapped, but its values are still being matched to Distru names. */
+  checkingValues?: boolean;
 }
 
-type GroupId = "needs" | "mapped" | "ignored" | "filled";
+type GroupId = "needs" | "matching" | "mapped" | "ignored" | "filled";
 
 const GROUPS: { id: GroupId; title: string; hint: string }[] = [
   { id: "needs", title: "Needs you", hint: "Answer here, or pick a field on the row" },
+  { id: "matching", title: "Still matching", hint: "Being read now; they fill in on their own, or pick a field yourself" },
   { id: "mapped", title: "Mapped", hint: "Change any field from its dropdown" },
   { id: "ignored", title: "Not imported", hint: "These columns are skipped" },
   { id: "filled", title: "Filled by Distru", hint: "No column in your file, so Distru sets these" },
@@ -50,7 +55,7 @@ export function MappingReview({ view, api, refresh }: MappingReviewProps) {
   const own = plan.fields.filter((m) => !m.rationale.startsWith("derived:"));
   const usedBy = Object.fromEntries(own.map((m) => [m.target, m.sources.join(" + ")]));
   const rows = buildRows(plan, view.openQuestions);
-  const groupOf = (r: Row): GroupId => (r.questions.length ? "needs" : r.fill ? "filled" : r.mapping ? "mapped" : "ignored");
+  const groupOf = (r: Row): GroupId => (r.questions.length ? "needs" : r.matching ? "matching" : r.fill ? "filled" : r.mapping ? "mapped" : "ignored");
   const byGroup = Object.fromEntries(GROUPS.map((g) => [g.id, [] as Row[]])) as Record<GroupId, Row[]>;
   for (const r of rows) byGroup[groupOf(r)].push(r);
   // Required first inside Needs you, then file order.
@@ -59,6 +64,7 @@ export function MappingReview({ view, api, refresh }: MappingReviewProps) {
   const stages = Object.entries(view.stats.resolvedByStage ?? {}).filter(([k, n]) => n > 0 && k !== "unresolved");
   const bulk = view.openQuestions.filter((q) => q.suggested && !(q.guess && q.guess.score < 0.4));
   const required = byGroup.needs.filter(isRequired).length;
+  const matchingLeft = view.matching?.columns.length ?? 0;
 
   return (
     <div className="ci-review">
@@ -148,12 +154,15 @@ export function MappingReview({ view, api, refresh }: MappingReviewProps) {
       </div>
 
       <Footer notice={notice} error={error}>
+        {matchingLeft > 0 && <span className="ci-muted"><span className="ci-spinner" /> Matching {matchingLeft} more {matchingLeft === 1 ? "column" : "columns"}</span>}
+        {matchingLeft === 0 && view.matching && <span className="ci-muted"><span className="ci-spinner" /> Checking names against Distru</span>}
         {view.blockingQuestions > 0 && (
           <span className="ci-muted">{view.blockingQuestions} required {view.blockingQuestions === 1 ? "answer" : "answers"} left</span>
         )}
         <button
           className="ci-btn ci-primary"
-          disabled={busy || view.blockingQuestions > 0}
+          disabled={busy || view.blockingQuestions > 0 || !!view.matching}
+          title={view.matching ? "Available once matching finishes, in a few seconds" : undefined}
           onClick={() => run(() => api.confirmMapping(view.id, view.planVersion))}
         >
           Confirm mapping
@@ -167,6 +176,8 @@ const isRequired = (r: Row) => r.questions.some((q) => q.blocking);
 
 /** Every file column once, in file order, then Distru-filled fields; open questions attach to the row they're about. */
 function buildRows(plan: MappingPlan, open: Question[]): Row[] {
+  const waiting = new Set(plan.pending?.columns ?? []);
+  const checking = new Set(plan.pending?.fields ?? []);
   const own = plan.fields.filter((m) => !m.rationale.startsWith("derived:"));
   const derived = plan.fields.filter((m) => m.rationale.startsWith("derived:"));
   const valueMaps = Object.entries(plan.valueMaps).filter(([k, m]) => !k.startsWith("__slang:") && Object.keys(m).length);
@@ -189,6 +200,8 @@ function buildRows(plan: MappingPlan, open: Question[]): Row[] {
       derived: kids,
       valueMaps: valueMaps.filter(([f]) => targets.has(f)),
       questions: [],
+      ...(!m && waiting.has(h) ? { matching: true } : {}),
+      ...([...targets].some((t) => checking.has(t)) ? { checkingValues: true } : {}),
     });
   });
 
@@ -237,7 +250,7 @@ function TableRow({ row, group, fields, usedBy, busy, onRemap }: {
                 usedBy={usedBy}
                 value={m?.target ?? IGNORE}
                 disabled={busy}
-                placeholder={group === "ignored" ? "Not imported" : "Choose a field"}
+                placeholder={group === "ignored" ? "Not imported" : group === "matching" ? "Matching…" : "Choose a field"}
                 onChange={onRemap}
               />
             )}
@@ -247,6 +260,8 @@ function TableRow({ row, group, fields, usedBy, busy, onRemap }: {
           {dev && m && <span className={`ci-score ci-score-${confidenceTone(m.score)}`}>{Math.round(m.score * 100)}%</span>}
           {fill && <FillValue d={fill} />}
           {!m && !fill && group === "ignored" && <span className="ci-meta-note">{ignoredLabel(row.ignored!.reason, dev)}</span>}
+          {group === "matching" && <span className="ci-meta-note"><span className="ci-spinner" /> matching</span>}
+          {row.checkingValues && <span className="ci-meta-note" title="Matching its values to names in your Distru account"><span className="ci-spinner" /> checking names</span>}
         </div>
       </div>
 

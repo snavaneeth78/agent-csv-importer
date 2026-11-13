@@ -64,14 +64,14 @@ How a host app wires it up: [docs/api-integration.md](docs/api-integration.md).
 
 ```bash
 npm install
-npm test            # 139 tests; integration tests start Postgres with testcontainers
+npm test            # 146 tests; integration tests start Postgres with testcontainers
 npm run eval        # column-matching precision/recall per fixture and per stage, latency vs targets
 npm run typecheck
 ```
 
 ## What's built and what isn't
 
-**Built:** the library above, the demo (chat + import card + mock Distru), 139 tests, the matching eval, and 7
+**Built:** the library above, the demo (chat + import card + mock Distru), 146 tests, the matching eval, and 7
 fixtures.
 
 **Not built:** the LangGraph agent loop (the demo agent is rule-based but calls the real six tools), the workflow path

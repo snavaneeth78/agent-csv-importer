@@ -20,6 +20,36 @@ export interface FinalizeDeps {
   valueStages: ValueStage[];
   /** Model spend from value matching, by stage method ("jev" | "llm"). */
   onUsage?: (method: string, u: ModelUsage) => void;
+  /**
+   * Skip the model value stages. Fields whose values still need them are listed in `plan.pending.fields` and get
+   * no value questions yet, so the early review never asks about a vendor a model would have matched.
+   */
+  deferModels?: boolean;
+}
+
+const isModelStage = (s: { method: string }) => s.method === "jev" || s.method === "llm";
+
+/**
+ * Value stages whose answers are kept per field and set of values, so the same model call isn't paid twice: value
+ * matching started early (while column models run) is reused by the final pass over the merged plan.
+ */
+export function memoValueStages(stages: ValueStage[]): ValueStage[] {
+  return stages.map((s) => {
+    const cache = new Map<string, ReturnType<ValueStage["run"]>>();
+    return {
+      method: s.method,
+      run(input, opts) {
+        const key = `${input.field.name}\u0000${JSON.stringify([...input.values].sort())}`;
+        let p = cache.get(key);
+        if (!p) {
+          p = s.run(input, opts);
+          cache.set(key, p);
+          p.catch(() => cache.delete(key));
+        }
+        return p;
+      },
+    };
+  });
 }
 
 export function emptyPlan(headers: string[], headerRow: number, sheet?: string): MappingPlan {
@@ -173,8 +203,10 @@ export async function finalizePlan(plan: MappingPlan, deps: FinalizeDeps): Promi
     // not turn "Top Shelf" into an existing "Premium". Models only help where a match is required.
     entries.push({ m, key, fd, allowed: fd.enumValues ?? deps.refs[key] ?? [], values, map, todo: [...values].filter((v) => !(valueKey(v) in map)), modelsAllowed: fd.ref?.mode !== "auto_create" });
   }
+  const modelStages = deps.valueStages.some(isModelStage);
   for (const stage of deps.valueStages) {
-    const isModel = stage.method === "jev" || stage.method === "llm";
+    const isModel = isModelStage(stage);
+    if (isModel && deps.deferModels) continue;
     const due = entries.filter((e) => e.todo.length && (!isModel || e.modelsAllowed));
     const results = await Promise.all(due.map((e) => stage.run({ field: e.fd, values: e.todo, allowed: e.allowed, aliases: profile.valueAliases?.[e.key] ?? {} }, { onUsage: (u) => deps.onUsage?.(stage.method, u) })));
     due.forEach((e, i) => {
@@ -183,7 +215,13 @@ export async function finalizePlan(plan: MappingPlan, deps: FinalizeDeps): Promi
       e.todo = e.todo.filter((v) => !hit.has(v));
     });
   }
-  for (const { m, key, fd, allowed, values, map, todo } of entries) {
+  const pendingFields = new Set<string>();
+  for (const { m, key, fd, allowed, values, map, todo, modelsAllowed } of entries) {
+    // Values only a model can still place: decided (and asked about) once the model answers are in.
+    if (deps.deferModels && modelStages && modelsAllowed && todo.length) {
+      pendingFields.add(key);
+      continue;
+    }
     for (const v of todo) map[valueKey(v)] = fd.ref?.mode === "auto_create" ? { create: v } : null;
 
     // A must-exist column where no value exists in Distru is probably the wrong field ("Label" holding
@@ -325,8 +363,14 @@ export async function finalizePlan(plan: MappingPlan, deps: FinalizeDeps): Promi
     });
   }
 
-  // 7. Not a product list (§9b).
-  if (!mappingFor(plan, target.nameField) || plan.fields.filter((m) => !derivedFrom(m)).length < 2) {
+  // Columns still waiting for a model answer: no question yet, they show as "matching".
+  const decided = new Set([...plan.fields.flatMap((m) => m.sources), ...plan.ignoredColumns.map((i) => i.source)]);
+  const pendingColumns = (plan.pending?.columns ?? []).filter((c) => !decided.has(c));
+  if (pendingColumns.length || pendingFields.size) plan.pending = { columns: pendingColumns, fields: [...pendingFields] };
+  else delete plan.pending;
+
+  // 7. Not a product list (§9b). Not while columns are still being matched: the name may be one of them.
+  if (!pendingColumns.length && (!mappingFor(plan, target.nameField) || plan.fields.filter((m) => !derivedFrom(m)).length < 2)) {
     questions.push({
       id: "not_a_catalog", kind: "not_a_catalog", blocking: true,
       prompt: "This doesn't look like a product list. Which column is the product name?",
@@ -374,6 +418,8 @@ export function applyPatch(prev: MappingPlan, patch: PlanPatch, target: TargetSc
   const colBy = new Map(columns.map((c) => [c.source, c]));
   const unmapSource = (src: string) => {
     plan.fields = plan.fields.filter((m) => !(m.sources.length === 1 && m.sources[0] === src));
+    // The user decided this column; a model answer arriving later must not overwrite it.
+    if (plan.pending) plan.pending.columns = plan.pending.columns.filter((c) => c !== src);
   };
   const setField = (targetName: string, sources: string[], transforms?: Transform[]) => {
     const fd = target.fields[targetName];
