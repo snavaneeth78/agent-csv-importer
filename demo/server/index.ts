@@ -175,6 +175,12 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 // Local demo with no auth: listen on loopback only, never the LAN.
-app.listen(PORT, "127.0.0.1", () => {
+// If the port is taken, another demo is running: exit instead of staying up as a second set of job workers on the same
+// queue. Two servers each have their own in-memory MockDistru, so jobs picked up by the other one fail with 404s.
+app.listen(PORT, "127.0.0.1", (err?: Error) => {
+  if (err) {
+    console.error(`demo server: can't listen on ${BASE} (${err.message}). Is another demo already running? Stop it first.`);
+    process.exit(1);
+  }
   console.log(`demo server on ${BASE}  (models: jev=${models.real.jev || "mock"}, llm=${models.real.llm || "mock"}, llm step ${importer.stageEnabled("llm") ? "on" : "off"}; mock catalog: ${mock.products.length} products)`);
 });
