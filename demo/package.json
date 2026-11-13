@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k -n server,web \"tsx watch server/index.ts\" \"vite\"",
+    "dev": "concurrently -k -n server,web \"tsx watch server/index.ts\" \"node wait-for-api.mjs && vite\"",
     "server": "tsx server/index.ts"
   },
   "dependencies": {

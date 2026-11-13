@@ -30,7 +30,7 @@ for (const f of readdirSync("fixtures/expected").filter((x) => x.endsWith(".json
   const columns = profileColumns(table.headers, table.rows.map((r) => r.cells));
   const ms: Record<string, number> = {};
   const t0 = performance.now();
-  const res = await runCascade({ ctx: { tenantId: "eval", actor: "eval" }, target: productSchema, columns, memory: [], config, stages: timed(defaultStages({ config, jev: models.jev, llm: process.env.EVAL_NO_LLM === "1" ? undefined : models.llm }), ms) });
+  const res = await runCascade({ ctx: { tenantId: "eval", actor: "eval" }, target: productSchema, columns, memory: [], config, stages: timed(defaultStages({ config, jev: models.jev, llm: process.env.EVAL_LLM === "1" ? models.llm : undefined }), ms) });
   const wall = performance.now() - t0;
   latency.deterministic.push(["template", "memory", "exact", "pattern", "fuzzy"].reduce((s, k) => s + (ms[k] ?? 0), 0));
   // What the user waits on for model answers: Jev and the LLM overlap, so this is less than their sum.
@@ -63,7 +63,7 @@ function pct(x: number) { return Number.isFinite(x) ? `${(x * 100).toFixed(1)}%`
 const p95 = (a: number[]) => (a.length ? `${[...a].sort((x, y) => x - y)[Math.floor(a.length * 0.95)]?.toFixed(1) ?? a.at(-1)!.toFixed(1)} ms` : "n/a");
 const table = (head: string[], body: string[][]) => [head, ...body].map((r) => r.map((c, i) => c.padEnd(Math.max(...[head, ...body].map((x) => x[i].length)))).join("  ")).join("\n");
 
-console.log(`\nModels: jev=${models.real.jev || "mock"}, llm=${process.env.EVAL_NO_LLM === "1" ? "off" : models.real.llm || "mock"}\n`);
+console.log(`\nModels: jev=${models.real.jev || "mock"}, llm=${process.env.EVAL_LLM === "1" ? models.real.llm || "mock" : "off (EVAL_LLM=1 to include)"}\n`);
 console.log(table(["fixture", "columns", "precision", "recall"], [...rows, ["ALL", String(cols), pct(tp / (tp + fp)), pct(tp / (tp + fn))]]));
 console.log("\n" + table(["stage", "columns", "share", "precision"], Object.entries(stageTotals).map(([k, v]) => [k, String(v.n), pct(v.n / cols), pct(v.correct / v.n)])));
 console.log("\n" + table(["target", "goal", "measured"], [

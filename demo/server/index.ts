@@ -50,7 +50,7 @@ const profile = createDistruProductProfile({
 });
 const importer = createImporter({
   pool, boss, profiles: [profile], scorer: models.jev, llm: models.llm, config: { scorers: { timeoutMs: models.timeoutMs } } as any,
-  disabledStages: process.env.LLM_STAGE === "off" ? ["llm"] : [],
+  disabledStages: process.env.LLM_STAGE === "on" ? [] : ["llm"],
 });
 await importer.migrate();
 // The mock catalog lives in memory, so a restart must also drop the persisted snapshot of it.
@@ -103,6 +103,13 @@ app.post("/api/chat", async (req, res, next) => {
     }
     res.json({ messages: await agent.userTurn(threadId, text ?? "", attachmentId ? { id: attachmentId, name: fileName } : undefined) });
   } catch (e) { next(e); }
+});
+// Guided tour: the demo home's "Try …" buttons fetch these fixtures and drop them on the chat. Allowlisted names only.
+const TOUR_FIXTURES = new Set(["messy-200.csv", "slang-units.csv", "duplicate-heavy.csv"]);
+const FIXTURES_DIR = fileURLToPath(new URL("../../fixtures/", import.meta.url));
+app.get("/api/fixtures/:name", (req, res) => {
+  if (!TOUR_FIXTURES.has(req.params.name)) return res.status(404).json({ error: "Unknown fixture" });
+  res.type("text/csv").send(readFileSync(`${FIXTURES_DIR}${req.params.name}`));
 });
 app.get("/api/threads/:threadId/messages", (req, res) => {
   const after = int(req.query.afterId) ?? 0;

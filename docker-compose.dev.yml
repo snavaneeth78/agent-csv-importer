@@ -1,0 +1,5 @@
+# For `npm run demo` / `npm run db:up` (the app runs on the host): publish Postgres on localhost:54329, which
+# DATABASE_URL in .env.example points at. `docker compose up` alone (the app in Docker) doesn't need this.
+services:
+  postgres:
+    ports: ["127.0.0.1:54329:5432"]

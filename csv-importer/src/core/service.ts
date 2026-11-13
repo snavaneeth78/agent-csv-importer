@@ -261,7 +261,8 @@ export class ImportService {
     let patch = built ?? args.patch ?? {};
     const track = (key: string) => (u: ModelUsage) => { spent[key] = addUsage(spent[key], u); };
     if (args.instruction && !built) {
-      if (!this.d.llm || !this.stageEnabled("llm")) throw new StateError("The LLM step is off, so free-text edits aren't available. Answer by number, or use \"map <column> to <field>\".");
+      // Free-text edits need an LLM, but not the LLM matching stage: they're user-triggered, never on the matching path.
+      if (!this.d.llm) throw new StateError("No LLM is configured, so free-text edits aren't available. Answer by number, or use \"map <column> to <field>\".");
       const plan = snapshot.plan!;
       patch = await this.d.llm.planPatch({
         instruction: args.instruction,

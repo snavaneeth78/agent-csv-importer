@@ -10,6 +10,14 @@ body { font: 14px/1.5 var(--ci-font); color: var(--ci-text); background: var(--c
 .app-sub { font-weight: 700; color: var(--ci-mint); }
 .app-crumb { color: rgba(255, 253, 245, .65); }
 .app-crumb::before { content: "/"; margin-right: 14px; color: rgba(255, 253, 245, .3); }
+/* Sample files in the header, with a hover tooltip describing each one */
+.app-samples { display: flex; align-items: center; gap: 6px; margin-left: 18px; }
+.app-samples-label { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: rgba(255, 253, 245, .45); margin-right: 2px; }
+.app-sample { position: relative; font: inherit; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px; border: 1px solid rgba(255, 253, 245, .22); background: transparent; color: var(--ci-cream); cursor: pointer; transition: background .12s, border-color .12s, color .12s; }
+.app-sample:hover:not(:disabled), .app-sample:focus-visible { background: var(--ci-mint); border-color: var(--ci-mint); color: var(--ci-ink); outline: none; }
+.app-sample:disabled { opacity: .5; cursor: default; }
+.app-sample::after { content: attr(data-tip); position: absolute; top: calc(100% + 8px); left: 50%; transform: translate(-50%, -4px); width: max-content; max-width: 260px; padding: 8px 10px; border-radius: 8px; background: var(--ci-ink); color: var(--ci-cream); box-shadow: 0 6px 20px rgba(0, 0, 0, .25); font-size: 12px; font-weight: 500; line-height: 1.4; text-align: left; white-space: normal; pointer-events: none; opacity: 0; transition: opacity .12s, transform .12s; z-index: 20; }
+.app-sample:hover::after, .app-sample:focus-visible::after { opacity: 1; transform: translate(-50%, 0); transition-delay: .15s; }
 .app-dev { margin-left: auto; display: inline-flex; align-items: center; gap: 10px; padding: 6px 4px; border: 0; background: none; color: rgba(255, 253, 245, .65); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; border-radius: 8px; }
 .app-dev:hover { color: var(--ci-cream); }
 .app-dev:focus-visible { outline: 2px solid var(--ci-mint); outline-offset: 2px; }
@@ -47,8 +55,13 @@ body { font: 14px/1.5 var(--ci-font); color: var(--ci-text); background: var(--c
 .msg-user { align-self: flex-end; background: var(--ci-ink); color: var(--ci-cream); border-bottom-right-radius: 5px; }
 .msg-assistant { align-self: flex-start; background: var(--ci-surface); border: 1px solid var(--ci-border); border-bottom-left-radius: 5px; }
 .msg-pending { padding: 12px 16px; }
+.msg-text strong { font-weight: 700; color: var(--ci-text); }
+.msg-text code { font: 600 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 2px 5px; border-radius: 5px; background: var(--ci-bg); border: 1px solid var(--ci-border); }
+.msg-text .msg-cmd { font-family: inherit; font-size: 12.5px; color: #0d7a45; }
 .msg-chip { display: inline-flex; align-items: center; gap: 4px; margin-top: 8px; font: inherit; font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--ci-border-strong); background: var(--ci-bg); color: var(--ci-text-2); cursor: pointer; }
 .msg-chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ci-border-strong); }
+.msg-chip-file { font-weight: 500; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-chip-file::before { content: "· "; }
 .msg-chip-on { border-color: var(--ci-accent); color: #0d7a45; }
 .msg-chip-on::before { background: var(--ci-mint); }
 
@@ -65,6 +78,8 @@ body { font: 14px/1.5 var(--ci-font); color: var(--ci-text); background: var(--c
 .chat-chip { flex: none; white-space: nowrap; font: inherit; font-size: 12px; font-weight: 600; padding: 5px 11px; border-radius: 999px; border: 1px solid var(--ci-border-strong); background: var(--ci-surface); color: var(--ci-text-2); cursor: pointer; transition: background .12s, border-color .12s; }
 .chat-chip:hover:not(:disabled) { background: var(--ci-mint-soft); border-color: var(--ci-accent); color: #0d6a3d; }
 .chat-chip:disabled { opacity: .5; }
+
+.chat-empty-hint { margin-top: 14px; font-size: 13px; }
 .chat-input { display: flex; align-items: center; gap: 6px; padding: 5px; border: 1px solid var(--ci-border-strong); border-radius: 14px; background: var(--ci-bg); transition: border-color .12s, box-shadow .12s; }
 .chat-input:focus-within { border-color: var(--ci-accent); box-shadow: 0 0 0 3px var(--ci-mint-soft); }
 .chat-text { flex: 1; min-width: 0; font: inherit; font-size: 14px; padding: 7px 4px; border: 0; outline: none; background: transparent; color: var(--ci-text); }

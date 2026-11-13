@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent, type MutableRefObject, type ReactNode } from "react";
 import { ImportCard, httpImportApi, type ExportData, type ImportApi, type ImportView } from "@distru/csv-importer/ui";
 
 interface ChatMessage {
@@ -44,7 +44,7 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-function readBase64(file: File): Promise<string> {
+function readBase64(file: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
     r.onload = () => resolve(String(r.result).replace(/^data:[^,]*,/, ""));
@@ -56,14 +56,36 @@ function readBase64(file: File): Promise<string> {
 export function App() {
   const api = useMemo(() => httpImportApi("/api"), []);
   const [threadId] = useState(threadIdFor);
-  const [importId, setImportIdState] = useState<string | null>(() => store(KEY_IMPORT));
+  // The import shown on the right. The one remembered from last visit is checked first (below), so it starts empty.
+  const [importId, setImportIdState] = useState<string | null>(null);
   const [view, setView] = useState<ImportView | null>(null);
+
+  // The browser remembers the last import, but the demo's database may not: a fresh `docker compose up`, or another
+  // copy of the demo on the same port. Reopen it only if the server still knows it; otherwise forget it quietly
+  // instead of showing a "not found" card. If the server can't be reached, reopen it and let the card say so.
+  useEffect(() => {
+    const stored = store(KEY_IMPORT);
+    if (!stored) return;
+    let live = true;
+    fetch(`/api/imports/${encodeURIComponent(stored)}`)
+      .then((r) => r.status)
+      .catch(() => 0)
+      .then((status) => {
+        if (!live || store(KEY_IMPORT) !== stored) return;
+        if (status === 404) store(KEY_IMPORT, null);
+        else setImportIdState((cur) => cur ?? stored);
+      });
+    return () => { live = false; };
+  }, []);
   const [cleared, setCleared] = useState<string | null>(null);
   // Developer mode is the demo view (stages, scores, timings, payloads). Off is what a customer sees.
   const [dev, setDev] = useState(() => store(KEY_DEV) !== "off");
   const toggleDev = () => setDev((d) => { store(KEY_DEV, d ? "off" : "on"); return !d; });
   // An import the user reopened from its chat chip stays open even if it's cancelled.
   const pinned = useRef<string | null>(null);
+  // The header's sample files drop a fixture on the chat; Chat registers how, and says when it's busy.
+  const dropSample = useRef<((file: string) => void) | null>(null);
+  const [chatBusy, setChatBusy] = useState(false);
 
   const selectImport = useCallback((id: string, explicit = false) => {
     if (explicit) pinned.current = id;
@@ -88,13 +110,21 @@ export function App() {
         <span className="app-divider" />
         <span className="app-sub">Copilot</span>
         <span className="app-crumb">Product import</span>
+        <nav className="app-samples" aria-label="Sample files">
+          <span className="app-samples-label">Samples</span>
+          {SAMPLES.map((s) => (
+            <button key={s.file} type="button" className="app-sample" data-tip={s.hint} aria-label={`Import ${s.file}: ${s.hint}`} disabled={chatBusy} onClick={() => dropSample.current?.(s.file)}>
+              {s.file}
+            </button>
+          ))}
+        </nav>
         <button type="button" role="switch" aria-checked={dev} className={`app-dev${dev ? " app-dev-on" : ""}`} onClick={toggleDev} title={dev ? "Showing matching stages, scores and payloads" : "Showing what a customer sees"}>
           <span className="app-dev-label">Developer mode</span>
           <span className="app-dev-track" aria-hidden="true"><span className="app-dev-thumb" /></span>
         </button>
       </header>
       <main className="app-main">
-        <Chat dev={dev} threadId={threadId} activeImportId={importId} status={importId && view?.id === importId ? view.status : undefined} onImport={selectImport} />
+        <Chat dev={dev} threadId={threadId} sampleRef={dropSample} onBusy={setChatBusy} activeImportId={importId} status={importId && view?.id === importId ? view.status : undefined} onImport={selectImport} />
         <section className="app-side">
           {importId ? (
             <>
@@ -141,6 +171,13 @@ const SUGGESTIONS: Partial<Record<ImportView["status"], string[]>> = {
   cancelled: ["rerun"],
 };
 
+/** Sample files in the header: one click fetches the fixture from the demo server and drops it on the chat. */
+const SAMPLES = [
+  { file: "messy-200.csv", hint: "200 messy rows: junk header rows, slang sizes, an unknown vendor, duplicates and invalid rows." },
+  { file: "slang-units.csv", hint: "Sizes written every way: 8th, quarter, 1/8 oz, 5pk 0.5g. Shows the unit questions at Gate 1." },
+  { file: "duplicate-heavy.csv", hint: "Overlaps the 50-product mock catalog. At Gate 2, try “update existing”." },
+] as const;
+
 /** Chips that only make sense when demoing the engine. */
 const DEV_SUGGESTIONS = new Set(["llm off", "llm on", "rerun", "show mapping", "status"]);
 
@@ -153,7 +190,26 @@ function polish(text: string): string {
     .replace(/will be created inactive, then finished over ~(\d+) min/g, "will be added, then go live in about $1 min");
 }
 
-function Chat({ dev, threadId, activeImportId, status, onImport }: { dev: boolean; threadId: string; activeImportId: string | null; status?: ImportView["status"]; onImport: (id: string, explicit?: boolean) => void }) {
+/** Light markdown for assistant messages: **bold**, `code`, "quoted commands" as chips, standalone numbers in bold, "- " bullets. */
+const INLINE = /\*\*([^*\n]+)\*\*|`([^`\n]+)`|"([^"\n]{1,40})"|(?<![\w.\-/])(\d[\d,]*(?:\.\d+)?%?)(?![\w\-/]|\.\w)/g;
+function Rich({ text }: { text: string }) {
+  const out: ReactNode[] = [];
+  const src = text.replace(/^(\s*)- /gm, "$1• ");
+  let last = 0;
+  for (const m of src.matchAll(INLINE)) {
+    if (m.index! > last) out.push(src.slice(last, m.index));
+    const k = m.index!;
+    if (m[1] !== undefined) out.push(<strong key={k}>{m[1]}</strong>);
+    else if (m[2] !== undefined) out.push(<code key={k}>{m[2]}</code>);
+    else if (m[3] !== undefined) out.push(<code key={k} className="msg-cmd">{m[3]}</code>);
+    else out.push(<strong key={k}>{m[4]}</strong>);
+    last = k + m[0].length;
+  }
+  if (last < src.length) out.push(src.slice(last));
+  return <>{out}</>;
+}
+
+function Chat({ dev, threadId, activeImportId, status, onImport, sampleRef, onBusy }: { dev: boolean; threadId: string; activeImportId: string | null; status?: ImportView["status"]; onImport: (id: string, explicit?: boolean) => void; sampleRef: MutableRefObject<((file: string) => void) | null>; onBusy: (busy: boolean) => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -236,7 +292,32 @@ function Chat({ dev, threadId, activeImportId, status, onImport }: { dev: boolea
     }
   };
 
+  const tryFixture = async (name: string) => {
+    if (sending) return;
+    try {
+      const res = await fetch(`/api/fixtures/${encodeURIComponent(name)}`);
+      if (!res.ok) throw new Error();
+      await send({ file: { name, base64: await readBase64(await res.blob()) } });
+    } catch {
+      setError(`Couldn't load ${name}. Is the demo server running?`);
+    }
+  };
+
+  sampleRef.current = tryFixture;
+  useEffect(() => { onBusy(sending); }, [sending, onBusy]);
+
   const suggestions = (status ? SUGGESTIONS[status] ?? [] : []).filter((t) => dev || !DEV_SUGGESTIONS.has(t));
+
+  // Which file each import came from: the last "📎 name" the user sent before the import's first message.
+  const fileOf = useMemo(() => {
+    const map = new Map<string, string>();
+    let file: string | undefined;
+    for (const m of messages) {
+      if (m.role === "user") file = /📎 (.+)$/m.exec(m.text)?.[1] ?? file;
+      else if (m.importId && file && !map.has(m.importId)) map.set(m.importId, file);
+    }
+    return map;
+  }, [messages]);
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -270,17 +351,19 @@ function Chat({ dev, threadId, activeImportId, status, onImport }: { dev: boolea
             </div>
             <h2>Import your product catalog</h2>
             <p className="muted">Drop a CSV or XLSX here in any format. I'll map the columns, flag anything unclear, and ask before anything is written to Distru.</p>
+            <p className="muted chat-empty-hint">No file handy? Pick one under <b>Samples</b> at the top.</p>
           </div>
         )}
         {messages.map((m) => (
           <div key={m.id} className={`msg msg-${m.role}`}>
-            <div className="msg-text">{dev || m.role === "user" ? m.text : polish(m.text)}</div>
+            <div className="msg-text">{m.role === "user" ? m.text : <Rich text={dev ? m.text : polish(m.text)} />}</div>
             {m.importId && (
               <button
                 className={`msg-chip${m.importId === activeImportId ? " msg-chip-on" : ""}`}
                 onClick={() => onImport(m.importId!, true)}
               >
                 {dev ? "Import card" : "View import"}
+                {fileOf.has(m.importId) && <span className="msg-chip-file">{fileOf.get(m.importId)}</span>}
               </button>
             )}
           </div>

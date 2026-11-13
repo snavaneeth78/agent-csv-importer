@@ -27,11 +27,15 @@ export interface CreateImporterOptions {
   profiles: TargetProfile[];
   /** Jev (stage 5). Omit to skip the stage. */
   scorer?: ChoiceScorer;
-  /** BYO LLM (stage 6 + natural-language revise). */
+  /** BYO LLM: stage 6 and value matching when switched on, and natural-language revise. */
   llm?: LlmMatcher;
   config?: DeepPartial<ImporterConfig>;
   fetch?: typeof fetch;
-  /** Stages to start switched off, e.g. ["llm"]. Toggle later with importer.setStageEnabled(). */
+  /**
+   * Stages to start switched off. Default ["llm"]: the LLM matching pass gave no gain in the eval and adds
+   * seconds, so matching ends at Jev. Pass [] to switch it on. Toggle later with importer.setStageEnabled().
+   * Natural-language revise works whenever `llm` is set, whatever this says.
+   */
   disabledStages?: ("llm" | "jev")[];
 }
 
@@ -50,7 +54,7 @@ export class Importer extends ImportService {
     this.config = config;
     this.store = store;
     this.boss = opts.boss;
-    for (const s of opts.disabledStages ?? []) this.setStageEnabled(s, false);
+    for (const s of opts.disabledStages ?? ["llm"]) this.setStageEnabled(s, false);
     this.jobs = new Jobs({ store, queue, service: this, config, valueStages, stages: defaultStages({ config, jev: opts.scorer, llm: opts.llm }), fetch: opts.fetch });
   }
 

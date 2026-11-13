@@ -35,6 +35,8 @@ export async function setupEnv(config: DeepPartial<ImporterConfig> = {}, models:
   const mock = new MockDistru(ctx.tenantId);
   const importer = createImporter({
     pool, boss, profiles: [await createMockedProfile(mock)], scorer: models.scorer ?? new MockJev(), llm: models.llm ?? new MockLlm(),
+    // Tests run the full cascade, LLM stage included; the off-by-default case has its own test.
+    disabledStages: [],
     // Fast retries by default; a test's own `jobs` settings are merged in, not swapped for them.
     config: { ...config, jobs: { retryDelaySeconds: 1, retryBackoff: false, ...config.jobs } } as DeepPartial<ImporterConfig>,
   });

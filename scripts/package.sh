@@ -10,10 +10,13 @@ trap 'rm -rf "$STAGE"' EXIT
 
 mkdir -p dist "$STAGE/$NAME"
 # Allowlist: only these paths ship, and only files git would track (so ignored files stay out).
-ALLOW='^(csv-importer|demo|fixtures|scripts|tests)/|^docs/[^/]+\.md$|^docs/screenshots/|^(README\.md|Dockerfile|\.dockerignore|docker-compose\.yml|\.env\.example|\.gitignore|\.nvmrc|package\.json|package-lock\.json|tsconfig\.json|vitest\.config\.ts)$'
+ALLOW='^(csv-importer|demo|fixtures|scripts|tests)/|^docs/[^/]+\.md$|^docs/screenshots/|^(README\.md|START-HERE\.md|start\.sh|Dockerfile|\.dockerignore|docker-compose(\.dev)?\.yml|\.env\.example|\.gitignore|\.nvmrc|package\.json|package-lock\.json|tsconfig\.json|vitest\.config\.ts)$'
 git ls-files --cached --others --exclude-standard | grep -E "$ALLOW" | while IFS= read -r f; do
   if [ -e "$f" ]; then mkdir -p "$STAGE/$NAME/$(dirname "$f")"; cp -p "$f" "$STAGE/$NAME/$f"; fi
 done
+
+# The one-page summary as a PDF too, since Google Drive shows .md as plain text. Skipped (with a warning) without Chrome.
+npx tsx scripts/start-here-pdf.ts "$STAGE/$NAME/START-HERE.pdf" || echo "warning: START-HERE.pdf not built"
 
 rm -f "$OUT"
 (cd "$STAGE" && zip -qr - "$NAME") > "$OUT"
@@ -41,5 +44,5 @@ fi
 # The same files, unzipped, for sending as a folder.
 rm -rf export && cp -R "$STAGE/$NAME" export
 
-grep -q "<LOOM_LINK>" README.md && echo "warning: README.md still has the <LOOM_LINK> placeholder"
+grep -l "<LOOM_LINK>" README.md START-HERE.md | sed "s/^/warning: <LOOM_LINK> placeholder still in /" || true
 echo "$OUT ($(du -h "$OUT" | cut -f1), $(zipinfo -1 "$OUT" | grep -vc '/$') files) and export/"

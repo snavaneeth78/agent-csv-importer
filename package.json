@@ -7,8 +7,8 @@
     "demo"
   ],
   "scripts": {
-    "db:up": "docker compose up -d --wait postgres",
-    "db:down": "docker compose down",
+    "db:up": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --wait postgres",
+    "db:down": "docker compose -f docker-compose.yml -f docker-compose.dev.yml down",
     "fixtures": "tsx scripts/gen-fixtures.ts",
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
@@ -16,6 +16,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "eval": "tsx scripts/eval.ts",
     "demo": "npm run db:up && npm run -w @distru/csv-importer-demo dev",
+    "demo:reset": "bash scripts/demo-reset.sh",
+    "demo:fresh": "npm run demo:reset && npm run demo",
     "diag:models": "tsx scripts/diag-models.ts",
     "package": "bash scripts/package.sh"
   },

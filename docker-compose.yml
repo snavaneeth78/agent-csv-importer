@@ -5,21 +5,22 @@ services:
       POSTGRES_USER: distru
       POSTGRES_PASSWORD: distru
       POSTGRES_DB: csv_import
-    ports: ["127.0.0.1:54329:5432"]
+    # No host port: the demo container reaches Postgres over the compose network, so a second copy of this folder (or
+    # another Postgres on the machine) can't clash. `npm run db:up` publishes 54329 via docker-compose.dev.yml.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U distru -d csv_import"]
       interval: 2s
       timeout: 3s
       retries: 20
 
-  # `docker compose up` runs the demo on http://localhost:5173 with stub models.
+  # `docker compose up` runs the demo on http://localhost:5173 with stub models. Port taken? WEB_PORT=5174 docker compose up
   # Real models: USE_REAL_MODELS=1 OPENAI_API_KEY=... TYPESAFE_API_KEY=... docker compose up
   demo:
     build: .
     depends_on:
       postgres:
         condition: service_healthy
-    ports: ["127.0.0.1:5173:5173"]
+    ports: ["127.0.0.1:${WEB_PORT:-5173}:5173"]
     # Everything in .env reaches the demo when the file exists; `environment` below wins on conflicts.
     env_file:
       - path: .env

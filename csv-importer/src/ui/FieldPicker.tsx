@@ -6,7 +6,7 @@ export const IGNORE = "__ignore";
 export interface FieldPickerProps {
   fields: TargetField[];
   value: string;
-  /** target -> source column(s) already mapped to it, shown as "from X". */
+  /** target -> source column(s) already mapped to it, shown as "used by X". */
   usedBy?: Record<string, string>;
   disabled?: boolean;
   placeholder?: string;
@@ -40,7 +40,7 @@ export function FieldPicker({ fields, value, usedBy = {}, disabled, placeholder 
       id: f.name,
       label: f.label,
       section: f.section ?? "Fields",
-      hint: usedBy[f.name] && f.name !== value ? `from ${usedBy[f.name]}` : undefined,
+      hint: usedBy[f.name] && f.name !== value ? usedBy[f.name] : undefined,
       tag: f.followup ? "after upload" : f.required ? "required" : undefined,
     }));
     if (allowIgnore && (value !== IGNORE || pending || question) && (!needle || "ignore column".includes(needle))) out.push({ id: IGNORE, label: "Ignore this column", section: "" });
@@ -110,7 +110,12 @@ export function FieldPicker({ fields, value, usedBy = {}, disabled, placeholder 
           className="ci-pop"
           style={{ left: pos.left, width: pos.width, ...(pos.up ? { bottom: window.innerHeight - pos.top } : { top: pos.top }) }}
         >
-          <input autoFocus className="ci-pop-search" placeholder="Search fields" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onKey} />
+          <div className="ci-pop-head">
+            <label className="ci-pop-search">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" strokeWidth="1.6" /><path d="m10.5 10.5 3 3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
+              <input autoFocus placeholder="Search fields" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onKey} />
+            </label>
+          </div>
           <div ref={list} className="ci-pop-list" role="listbox">
             {items.length === 0 && <div className="ci-pop-empty">No field matches "{q}"</div>}
             {items.map((it, i) => {
@@ -118,7 +123,7 @@ export function FieldPicker({ fields, value, usedBy = {}, disabled, placeholder 
               lastSection = it.section;
               return (
                 <div key={it.id}>
-                  {head !== null && (head ? <div className="ci-pop-group">{head}</div> : <div className="ci-pop-sep" />)}
+                  {head !== null && (head ? <div className={`ci-pop-group${i === 0 ? " ci-pop-group-first" : ""}`}>{head}</div> : <div className="ci-pop-sep" />)}
                   <div
                     data-i={i}
                     role="option"
@@ -128,7 +133,7 @@ export function FieldPicker({ fields, value, usedBy = {}, disabled, placeholder 
                     onMouseDown={(e) => { e.preventDefault(); pick(it.id); }}
                   >
                     <span className="ci-pop-label">{it.label}</span>
-                    {it.hint && <span className="ci-pop-hint">{it.hint}</span>}
+                    {it.hint && <span className="ci-pop-hint" title={`Your "${it.hint}" column is already mapped to ${it.label}`}>used by {it.hint}</span>}
                     {it.tag && <span className="ci-pop-tag">{it.tag}</span>}
                     {it.id === value && <span className="ci-pop-check" aria-hidden="true">✓</span>}
                   </div>

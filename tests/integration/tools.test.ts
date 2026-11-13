@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { createImporterTools } from "@distru/csv-importer/langgraph";
+import { createImporter } from "@distru/csv-importer/workers";
+import { MockLlm } from "@distru/csv-importer/scorers";
 import { ctx, fixture, setupEnv, waitFor, type Env } from "./harness.ts";
 
 let env: Env;
@@ -34,14 +36,21 @@ test("six tools; run context from config, never from arguments; gate tools recor
   expect((await env.importer.get(ctx, started.importId)).status).toBe("cancelled");
 });
 
-test("the LLM step can be switched off per run, and the run records it", async () => {
+test("the LLM matching stage is off by default", () => {
+  const importer = createImporter({ pool: {} as any, boss: {} as any, profiles: [], llm: new MockLlm() });
+  expect(importer.stageEnabled("llm")).toBe(false);
+  expect(importer.stageEnabled("jev")).toBe(true);
+  expect(createImporter({ pool: {} as any, boss: {} as any, profiles: [], disabledStages: [] }).stageEnabled("llm")).toBe(true);
+});
+
+test("with the LLM stage off, the run records it and free-text edits still work", async () => {
   env.importer.setStageEnabled("llm", false);
   try {
     const { importId } = await env.importer.start(ctx, { input: { bytes: new TextEncoder().encode("Name,Maker\nA,Kiva\nB,Wyld\n") }, filename: "off.csv", targetId: "distru.product" });
     const v = await waitFor(env.importer, importId, ["mapping_review"]);
     expect(v.stats.disabledStages).toEqual(["llm"]);
     expect(v.stats.matchStages?.some((s) => s.method === "llm")).toBe(false);
-    await expect(env.importer.revise(ctx, importId, { planVersion: v.planVersion, instruction: "map Maker to Brand" })).rejects.toThrow(/LLM step is off/);
+    await expect(env.importer.revise(ctx, importId, { planVersion: v.planVersion, instruction: "map Maker to Brand" })).resolves.toBeDefined();
     await env.importer.cancel(ctx, importId);
   } finally {
     env.importer.setStageEnabled("llm", true);

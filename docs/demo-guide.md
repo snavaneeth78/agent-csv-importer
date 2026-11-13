@@ -2,7 +2,7 @@
 
 ## The flow
 
-1. Drop `fixtures/messy-200.csv` on the chat. The agent calls `import_csv_start`; the card streams parse and mapping.
+1. Click **messy-200.csv** under **Samples** at the top, or drop `fixtures/messy-200.csv` on it. The agent calls `import_csv_start`; the card streams parse and mapping.
 2. **Gate 1, mapping.** Answer the slang questions ("Read eighth as 3.5 g?") and the unknown vendor in the card, or say
    "accept all". Try "ignore Internal Ref". Confirm with the button or "yes".
 3. **Gate 2, import.** Counts by new / update / skip / duplicate / invalid, diffs, the "Blank cells clear" option
@@ -25,8 +25,9 @@ sees. `ImportCard` takes it as the `devMode` prop and defaults to off.
 "How it ran" in the card header opens a timeline: time per step and per cascade stage, and which columns rules, Jev,
 the LLM or you decided.
 
-**With and without the LLM:** say "llm off" (or "llm on"), then "rerun" to run the same file again; "llm status"
-shows the setting. `LLM_STAGE=off` starts the demo with it off. For the eval, `EVAL_NO_LLM=1 npm run eval`.
+**With and without the LLM:** the LLM matching step is off by default (no gain in the eval; see the README). Say "llm on"
+(or "llm off"), then "rerun" to run the same file again; "llm status" shows the setting. `LLM_STAGE=on` starts the
+demo with it on. Free-text edits use the LLM either way. For the eval, `EVAL_LLM=1 npm run eval` includes it.
 
 ## Fixtures
 
@@ -46,8 +47,8 @@ Regenerate with `npm run fixtures`.
 Without keys, Jev and the LLM are deterministic stubs. To use real ones, set `USE_REAL_MODELS=1` and the keys, either
 on the `docker compose up` command line or in `.env` (copy `.env.example`).
 
-- **LLM:** OpenAI by default (`LLM_PROVIDER=openai`, `OPENAI_API_KEY`, `LLM_MODEL=gpt-4o`, which beat `gpt-4o-mini`
-  in the eval). `LLM_PROVIDER=openrouter` (`OPENROUTER_API_KEY`, e.g. `anthropic/claude-sonnet-4.5`) and
+- **LLM:** OpenAI by default (`LLM_PROVIDER=openai`, `OPENAI_API_KEY`, `LLM_MODEL=gpt-4o`, as accurate as `gpt-4o-mini`
+  in the eval and 3-5x faster). `LLM_PROVIDER=openrouter` (`OPENROUTER_API_KEY`, e.g. `anthropic/claude-sonnet-4.5`) and
   `LLM_PROVIDER=anthropic` (`ANTHROPIC_API_KEY`) also work.
 - **Jev:** TypeSafe directly by default (`JEV_PROVIDER=typesafe`, `TYPESAFE_API_KEY`, `JEV_MODEL=jev-latest`, one
   choice question per column). `JEV_PROVIDER=openrouter` calls the same model through OpenRouter
