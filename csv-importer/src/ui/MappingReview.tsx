@@ -344,10 +344,13 @@ function NeedsRow({ row, fields, usedBy, headers, all, busy, onRemap, onAnswers,
   const mapQ = row.questions.find(isMapQ);
   const nameQ = row.questions.find((q) => q.kind === "not_a_catalog");
   // Names missing from a Distru list: one decision for the column, with the per-value picks inside it.
-  const missQ = m && all.find((q) => q.id === `missing:${m.target}`);
-  const inMiss = (q: Question) => !!missQ && (q.id === missQ.id || q.id.startsWith(`value:${m!.target}:`));
-  const follow = row.questions.filter((q) => !isMapQ(q) && q.kind !== "not_a_catalog" && !inMiss(q));
   const proposal = mapQ ? proposedTarget(mapQ, m) : undefined;
+  // Shown with the "is this really Vendor?" question too, but only while the row still proposes this field.
+  const missQ = m && (!mapQ || proposal === m.target) ? all.find((q) => q.id === `missing:${m.target}`) : undefined;
+  const inMiss = (q: Question) => !!missQ && (q.id === missQ.id || q.id.startsWith(`value:${m!.target}:`));
+  // Names questions for a field the row is about to drop are hidden, not listed one by one.
+  const dropped = (q: Question) => !!m && !missQ && (q.id === `missing:${m.target}` || q.id.startsWith(`value:${m.target}:`));
+  const follow = row.questions.filter((q) => !isMapQ(q) && q.kind !== "not_a_catalog" && !inMiss(q) && !dropped(q));
   const src = row.sources.join(" + ");
   const exact = !!m && sameName(src, fieldLabel(fields, m.target));
 

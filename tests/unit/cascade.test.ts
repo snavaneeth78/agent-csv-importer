@@ -195,7 +195,8 @@ describe("plan finalize", () => {
     const { p } = await plan(["Name", "Vendor"], [["A", "Kiva"], ["B", "Wyld"]]);
     const q = p.questions.find((x) => x.id === "check:vendor")!;
     expect(q).toMatchObject({ blocking: true, suggested: "brand" });
-    expect(p.questions.some((x) => x.id.startsWith("value:vendor:"))).toBe(false);
+    // The missing-names choice comes with it (the UI shows it while the row still proposes Vendor).
+    expect(p.questions.find((x) => x.id === "missing:vendor")?.values).toEqual(["Kiva", "Wyld"]);
     expect(p.fields.find((f) => f.target === "vendor")!.score).toBeLessThanOrEqual(0.4);
   });
 
@@ -211,7 +212,24 @@ describe("plan finalize", () => {
   test("a guessed header (synonym) holding unknown names still asks whether it's the right field", async () => {
     const { p } = await plan(["Name", "Supplier"], [["A", "Coastal Cultivators"], ["B", "Green Leaf Co"]]);
     expect(p.questions.find((x) => x.id === "check:vendor")?.values).toEqual(["Coastal Cultivators", "Green Leaf Co"]);
-    expect(p.questions.some((x) => x.id === "missing:vendor")).toBe(false);
+    // Asked together, so the user sees what happens to the names before deciding.
+    expect(p.questions.find((x) => x.id === "missing:vendor")?.values).toEqual(["Coastal Cultivators", "Green Leaf Co"]);
+  });
+
+  test("answering the missing-names choice keeps the field: one Accept settles both questions", async () => {
+    const { p, deps, columns } = await plan(["Name", "Supplier"], [["A", "Coastal Cultivators"], ["B", "Green Leaf Co"]]);
+    expect(openBlocking(p).map((x) => x.id).sort()).toEqual(["check:vendor", "missing:vendor"]);
+    const fin = await finalizePlan(applyPatch(p, { answers: { "missing:vendor": "blank" } }, productSchema, columns).plan, deps);
+    expect(fin.questions.find((x) => x.id === "check:vendor")?.answer).toBe("keep");
+    expect(fin.fields.find((f) => f.sources[0] === "Supplier")?.target).toBe("vendor");
+    expect(openBlocking(fin)).toHaveLength(0);
+  });
+
+  test("picking another field for the column drops the names question", async () => {
+    const { p, deps, columns } = await plan(["Name", "Supplier"], [["A", "Coastal Cultivators"], ["B", "Green Leaf Co"]]);
+    const fin = await finalizePlan(applyPatch(p, { answers: { "check:vendor": "description" } }, productSchema, columns).plan, deps);
+    expect(fin.fields.find((f) => f.sources[0] === "Supplier")?.target).toBe("description");
+    expect(fin.questions.some((x) => x.id.startsWith("missing:vendor") || x.id.startsWith("value:vendor:"))).toBe(false);
   });
 
   test("leaving missing vendors blank settles the column with no per-value questions", async () => {

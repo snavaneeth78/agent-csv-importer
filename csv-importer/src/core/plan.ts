@@ -263,7 +263,9 @@ export async function finalizePlan(plan: MappingPlan, deps: FinalizeDeps): Promi
         answer: check?.answer,
         values: [...values].slice(0, 5),
       });
-      continue;
+      // A Distru list (vendors, brands): the missing-names choice is asked alongside, so the user sees both at once
+      // and one Accept settles both. Answering it keeps the field (applyPatch). Enums have nothing more to ask.
+      if (fd.ref?.mode !== "must_exist") continue;
     }
 
     // Names a must-exist list doesn't have: one required decision for the column (add them in Distru and
@@ -515,6 +517,14 @@ export function applyPatch(prev: MappingPlan, patch: PlanPatch, target: TargetSc
       setField(target.nameField, [answer.slice(4)]);
     }
     changed.push(qid);
+  }
+  // Deciding what to do with a list's missing names (or matching one of them) means the column is that field: an
+  // open "is this really Vendor?" question is answered "keep" with it.
+  for (const qid of Object.keys(patch.answers ?? {})) {
+    const [kind, field] = qid.split(":");
+    if (kind !== "missing" && kind !== "value") continue;
+    const check = plan.questions.find((q) => q.id === `check:${field}`);
+    if (check && check.answer === undefined && !(check.id in (patch.answers ?? {}))) check.answer = "keep";
   }
   return { plan, changed };
 }
