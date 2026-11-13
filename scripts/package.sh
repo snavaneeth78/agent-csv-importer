@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds dist/distru-csv-importer.zip from an allowlist of paths, taking only files git would track (so .env,
+# Builds dist/distru-csv-importer.zip (and the same files unzipped in export/) from an allowlist of paths, taking only files git would track (so .env,
 # node_modules and demo/.data stay out), then checks that no env files or secret values made it in.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -38,5 +38,8 @@ if [ -f "$ENV_FILE" ]; then
   done < <(grep -E '^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=' "$ENV_FILE")
 fi
 
+# The same files, unzipped, for sending as a folder.
+rm -rf export && cp -R "$STAGE/$NAME" export
+
 grep -q "<LOOM_LINK>" README.md && echo "warning: README.md still has the <LOOM_LINK> placeholder"
-echo "$OUT ($(du -h "$OUT" | cut -f1), $(zipinfo -1 "$OUT" | grep -vc '/$') files)"
+echo "$OUT ($(du -h "$OUT" | cut -f1), $(zipinfo -1 "$OUT" | grep -vc '/$') files) and export/"
