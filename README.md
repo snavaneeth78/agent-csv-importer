@@ -13,7 +13,7 @@ for the import.
 | **1. UX mockup** | The demo below is the working mockup. Screenshots: [mapping](docs/screenshots/1-gate1-mapping.png), [import review](docs/screenshots/2-gate2-review.png), [finished](docs/screenshots/3-finished.png), [customer view](docs/screenshots/4-customer-view.png) |
 | **2. System design** | [docs/system-design.md](docs/system-design.md): the agent harness, for chat now and workflows later |
 | **3. Tech spec** | [docs/tech-spec.md](docs/tech-spec.md): the importer, ready for a coding agent |
-| **4. Loom** | `<LOOM_LINK>` |
+| **4. Loom** | [Walkthrough video on Google Drive](https://drive.google.com/file/d/1arqX4CuObCXxuJfFqg3V2kD-TUQbHKbM/view?usp=sharing) (about 14 min) |
 
 Key decisions, the alternatives I rejected, and known limits: [docs/decisions.md](docs/decisions.md).
 

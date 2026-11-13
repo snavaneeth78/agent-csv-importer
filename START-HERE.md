@@ -6,7 +6,7 @@ until the user confirms twice: once for the mapping (Gate 1), once for the impor
 library (state machine, matching cascade, Postgres store, pg-boss jobs, six agent tools, React import card) plus a
 working demo with a mock Distru.
 
-**Loom walkthrough:** <LOOM_LINK>
+**Loom walkthrough (about 14 min, on Google Drive):** https://drive.google.com/file/d/1arqX4CuObCXxuJfFqg3V2kD-TUQbHKbM/view?usp=sharing
 
 ## Run it in 2 commands
 
