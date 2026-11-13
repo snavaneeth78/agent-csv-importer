@@ -95,6 +95,25 @@ describe("mapping cascade (§4.1)", () => {
     expect(seen).toEqual(["Amt", "Count", "Value"]);
   });
 
+  test("decimals never go into a whole-number field on a guess: not from the LLM, not from memory", async () => {
+    // The "Qty" column of a misspelled file: 3.5, 7, 1, 28 grams. The LLM once called it Units per Case at 60%.
+    const llm = { modelId: "t", planPatch: async () => ({}), mapValues: async () => ({}),
+      mapColumns: async (i: { columns: { source: string }[] }) => i.columns.map((c) => ({ source: c.source, target: "units_per_case", confidence: 0.6 })) };
+    const jev = { modelId: "t", choose: async (items: { id: string }[]) => Object.fromEntries(items.map((it) => [it.id, { none: 0.51 }])) };
+    const rows = ["3.5", "7", "1", "28"].map((q, i) => ({ Name: `P${i}`, Qty: q }));
+    const columns = profileColumns(["Name", "Qty"], rows);
+    const memory: MemoryEntry[] = [{ headerNorm: columns[1].headerNorm, targetField: "units_per_case", transforms: [{ op: "parse_number" }], typeSig: "number", hits: 2 }];
+    const res = await runCascade({ ctx, target: productSchema, columns, memory, config, stages: defaultStages({ config, jev, llm }) });
+    expect(res.fields.some((f) => f.target === "units_per_case")).toBe(false);
+    expect(res.unresolved.map((c) => c.source)).toEqual(["Qty"]);
+
+    // Whole numbers still go there, and so does a column named for the field (its 3.5 becomes a row error).
+    const whole = profileColumns(["Name", "Qty"], ["12", "24", "6"].map((q, i) => ({ Name: `P${i}`, Qty: q })));
+    expect((await runCascade({ ctx, target: productSchema, columns: whole, memory: [], config, stages: defaultStages({ config, jev, llm }) })).fields.find((f) => f.sources[0] === "Qty")?.target).toBe("units_per_case");
+    const named = profileColumns(["Name", "Units per Case"], ["3.5", "12"].map((q, i) => ({ Name: `P${i}`, "Units per Case": q })));
+    expect((await runCascade({ ctx, target: productSchema, columns: named, memory: [], config, stages: defaultStages({ config }) })).fields.find((f) => f.sources[0] === "Units per Case")).toMatchObject({ target: "units_per_case", method: "template" });
+  });
+
   test("Jev and the LLM run at the same time: the wait is the slower call, not the sum", async () => {
     const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
     const jev = { modelId: "t", choose: async (items: { id: string }[]) => { await wait(150); return Object.fromEntries(items.map((it) => [it.id, { none: 0.9 }])); } };

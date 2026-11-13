@@ -93,6 +93,7 @@ export async function runCascade(input: {
         continue;
       }
       if (claimed.has(c.target) || !target.fields[c.target]) continue;
+      if (cantFill(target.fields[c.target], col, stage.method)) continue;
       const m: FieldMapping = {
         target: c.target,
         sources: [c.source],
@@ -125,5 +126,18 @@ export async function runCascade(input: {
 }
 
 const round = (n: number) => Math.round(n * 1000) / 1000;
+
+/** Stages whose evidence is the header itself: a column named "Units per Case" is that field, dirty values or not. */
+const HEADER_EVIDENCE = new Set<string>(["template", "exact"]);
+
+/**
+ * A guess can't put a column of decimals ("3.5", "7", "1", "28": a weight) into a whole-number field (units per
+ * case). Memory, fuzzy names, Jev and the LLM are all refused here; the column goes on to the next stage or to the
+ * user. Only a header that names the field outright maps anyway, and its stray decimals become row errors.
+ */
+export function cantFill(field: FieldDef, col: ColumnProfile, method: Method): boolean {
+  if (HEADER_EVIDENCE.has(method)) return false;
+  return field.type === "integer" && col.typeSig !== "integer" && col.typeSig !== "empty";
+}
 
 export type { Candidate };
