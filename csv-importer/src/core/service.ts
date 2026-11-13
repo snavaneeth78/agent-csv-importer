@@ -460,13 +460,45 @@ export class ImportService {
       // A created row whose Distru ID was never found has nothing to send the details to.
       const rows = (await r.listRows(importId, { status: ["needs_attention"], followup: true, limit: 1_000_000 })).filter((x) => x.distruId);
       if (!rows.length) return;
-      await r.updateRows(importId, rows.map((x) => ({ rowIndex: x.rowIndex, status: x.action === "create" ? "uploaded" : "valid", issues: x.issues.filter((i) => i.code !== "followup_failed") })));
+      await r.updateRows(importId, rows.map((x) => ({ rowIndex: x.rowIndex, status: x.action === "create" ? "uploaded" : "valid", issues: x.issues.filter((i) => i.code !== "followup_failed" && i.code !== "followup_skipped") })));
       await this.setStatus(r, imp, "committing", "user", { reason: "retry details" });
       for (let i = 0; i < rows.length; i += this.d.config.sink.followupBatchSize) batches.push(rows.slice(i, i + this.d.config.sink.followupBatchSize).map((x) => x.rowIndex));
     });
     const stamp = Date.now();
     for (const [i, rows] of batches.entries()) await this.d.queue.send(Q.followup, { tenantId: ctx.tenantId, importId, rows }, { singletonKey: `${importId}:${Q.followup}:retry${stamp}:${i}` });
     return { requeued: batches.flat().length };
+  }
+
+  /**
+   * "Skip details": stop the follow-up pass of an import that is still adding details. Every row still waiting is
+   * flagged needs_attention (its product stays inactive) and the import finishes now. Queued follow-up jobs see the
+   * import is no longer committing and exit. Retry details picks the skipped rows up again. Only once every product
+   * is created: skipping earlier would strand rows a commit chunk has yet to write.
+   */
+  async skipFollowups(ctx: Ctx, importId: string) {
+    return this.d.store.tx(ctx.tenantId, async (r) => {
+      const imp = await this.load(r, importId, true);
+      if (imp.status !== "committing") throw new StateError(`Nothing to skip (status ${imp.status})`);
+      const chunks = chunkRanges(imp.stats.totalRows ?? 0, this.d.config.jobs.chunkSize).length;
+      const done = (await r.listChunks(importId, "commit")).filter((c) => c.status === "done").length;
+      if (done < chunks) throw new StateError("Products are still being created; details can be skipped once they all exist");
+      const waiting = (await r.listRows(importId, { status: ["uploaded", "valid"], followup: true, limit: 1_000_000 }))
+        .filter((x) => x.status === "uploaded" || x.action === "update");
+      await r.updateRows(importId, waiting.map((x) => ({
+        rowIndex: x.rowIndex,
+        status: "needs_attention" as const,
+        issues: [...x.issues, { code: "followup_skipped", message: `Details skipped${x.action === "create" ? " (product left inactive)" : ""}`, severity: "error" as const }],
+      })));
+      const counts = await r.counts(importId);
+      const n = (s: string[]) => counts.filter((c) => s.includes(c.status)).reduce((a, c) => a + c.n, 0);
+      const committed = n(["committed", "uploaded"]);
+      const failed = n(["failed", "needs_attention"]);
+      // Skipped rows are products that exist (inactive), so never "failed": that is terminal and would block Retry details.
+      const to: ImportStatus = waiting.length ? "partially_completed"
+        : committed > 0 && failed > 0 ? "partially_completed" : committed === 0 && failed > 0 ? "failed" : "completed";
+      await this.setStatus(r, imp, to, "user", { reason: "skip details", skipped: waiting.length });
+      return { skipped: waiting.length, status: to };
+    });
   }
 
   /** Rows that failed validation or commit, with the original columns plus Row and Errors. */

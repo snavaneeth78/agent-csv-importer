@@ -36,6 +36,8 @@ export interface ImportApi {
   /** Start a failed import's file again; returns the new (or reused open) import. */
   retry(id: string): Promise<{ importId: string; status: ImportStatus; reused: boolean }>;
   retryFollowups(id: string): Promise<{ requeued: number }>;
+  /** Stop the details pass and finish the import now; the rows still waiting become needs_attention. */
+  skipFollowups(id: string): Promise<{ skipped: number; status: ImportStatus }>;
   exportJson(id: string): Promise<ExportData>;
   errorsCsvUrl(id: string): string;
   exportCsvUrl(id: string): string;
@@ -85,6 +87,7 @@ export function httpImportApi(base = "/api"): ImportApi {
     cancel: (id) => call(url(id, "/cancel"), {}),
     retry: (id) => call(url(id, "/retry"), {}),
     retryFollowups: (id) => call(url(id, "/retry-followups"), {}),
+    skipFollowups: (id) => call(url(id, "/skip-followups"), {}),
     exportJson: (id) => call(url(id, "/export.json")),
     errorsCsvUrl: (id) => url(id, "/errors.csv"),
     exportCsvUrl: (id) => url(id, "/export.csv"),

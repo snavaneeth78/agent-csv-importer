@@ -301,6 +301,9 @@ function Result({ view, api, refresh }: { view: ImportView; api: ImportApi; refr
   const p = view.progress;
   const problems = (c.invalid ?? 0) + (c.failed ?? 0) + (c.needs_attention ?? 0);
   const finished = view.status !== "committing";
+  // Developer mode only: once every product exists, stop waiting on the details pass (Retry details resumes it).
+  const pendingDetails = p.details.total - p.details.done - p.details.failed;
+  const canSkip = dev && !finished && p.created.done + p.created.failed >= p.created.total && pendingDetails > 0;
   return (
     <div className="ci-result">
       <Bar label="Created" {...p.created} />
@@ -317,8 +320,14 @@ function Result({ view, api, refresh }: { view: ImportView; api: ImportApi; refr
       )}
       {/* Developer mode shows the raw upload payload beside the card instead. */}
       {!dev && finished && <ImportedTable view={view} api={api} />}
-      {(problems > 0 || (finished && (c.needs_attention ?? 0) > 0)) && (
+      {(problems > 0 || canSkip || (finished && (c.needs_attention ?? 0) > 0)) && (
         <Footer notice={notice} error={error}>
+          {canSkip && (
+            <button className="ci-btn" disabled={busy} title="Stop adding details and finish now. Those products stay inactive until Retry details."
+              onClick={() => run(() => api.skipFollowups(view.id))}>
+              Skip details ({fmtNum(pendingDetails)})
+            </button>
+          )}
           {problems > 0 && <a className="ci-btn" href={api.errorsCsvUrl(view.id)} download>Download error CSV</a>}
           {finished && (c.needs_attention ?? 0) > 0 && (
             <button className="ci-btn ci-primary" disabled={busy} onClick={() => run(() => api.retryFollowups(view.id))}>

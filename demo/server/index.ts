@@ -132,6 +132,7 @@ app.post("/api/imports/:id/confirm-commit", route((req) => importer.confirmCommi
 app.post("/api/imports/:id/cancel", route((req) => importer.cancel(ctx, id(req), "user")));
 app.post("/api/imports/:id/retry", route((req) => importer.retry(ctx, id(req))));
 app.post("/api/imports/:id/retry-followups", route((req) => importer.retryFollowups(ctx, id(req))));
+app.post("/api/imports/:id/skip-followups", route((req) => importer.skipFollowups(ctx, id(req))));
 app.get("/api/imports/:id/errors.csv", async (req, res, next) => {
   try {
     res.attachment(`import-${id(req).slice(0, 8)}-errors.csv`).type("text/csv");
